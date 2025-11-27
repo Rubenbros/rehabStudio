@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(npx create-next-app:*)",
+      "Bash(npx create-next-app@latest temp-rehab --typescript --tailwind --app --src-dir --import-alias \"@/*\" --eslint)",
+      "Bash(npx create-next-app@latest temp-rehab --typescript --tailwind --app --src-dir --import-alias \"@/*\" --eslint --use-npm)",
+      "Bash(npx shadcn@latest init)",
+      "Bash(npx shadcn@latest add:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run dev:*)",
+      "Bash(npm run build:*)",
+      "Bash(taskkill /F /PID 11532 2)",
+      "Bash(nul)",
+      "Bash(del \"C:\\Users\\Rubenbros\\IdeaProjects\\rehabStudio\\src\\components\\animations\\UltrasoundBackground.tsx\")",
+      "Bash(taskkill:*)",
+      "Bash(powershell -Command \"Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force\")",
+      "Bash(claude mcp add magic --scope user --env API_KEY=\"351df2ca6b465d8801ae84fec41b380412f7f7af73b09ebce7e5b65047df1e16\" -- npx -y @21st-dev/magic@latest)",
+      "mcp__magic__21st_magic_component_builder",
+      "mcp__magic__21st_magic_component_inspiration",
+      "Bash(cat:*)",
+      "Bash(npx vercel:*)",
+      "Bash(del \"C:\\Users\\Rubenbros\\IdeaProjects\\rehabStudio\\src\\app\\page.tsx\")",
+      "Bash(del \"C:\\Users\\Rubenbros\\IdeaProjects\\rehabStudio\\src\\app\\layout.tsx\")",
+      "Bash(git checkout:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

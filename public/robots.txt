@@ -1,0 +1,11 @@
+# https://www.robotstxt.org/robotstxt.html
+User-agent: *
+Allow: /
+
+# Sitemap
+Sitemap: https://therehabstudio.es/sitemap.xml
+
+# Bloquear rutas innecesarias
+Disallow: /api/
+Disallow: /_next/
+Disallow: /admin/

@@ -1,0 +1,25 @@
+{
+  "postToolUse": [
+    {
+      "name": "Format with Prettier",
+      "description": "Automatically format TypeScript/TSX files after editing",
+      "command": "npx prettier --write \"${file}\"",
+      "triggerOnTools": ["Edit", "Write"],
+      "filePattern": "\\.(ts|tsx|js|jsx|css)$"
+    },
+    {
+      "name": "Lint after changes",
+      "description": "Run ESLint after editing source files",
+      "command": "npm run lint -- --fix --quiet",
+      "triggerOnTools": ["Edit", "Write"],
+      "filePattern": "src/.*\\.(ts|tsx)$"
+    }
+  ],
+  "sessionStart": [
+    {
+      "name": "Welcome Message",
+      "description": "Display project info on session start",
+      "command": "echo \"🎨 rehabStudio Portfolio - Next.js 15 + Tailwind + shadcn/ui\""
+    }
+  ]
+}

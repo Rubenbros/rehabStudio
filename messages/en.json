@@ -1,0 +1,112 @@
+{
+  "metadata": {
+    "title": "The Rehab Studio | Sports & Invasive Physiotherapy in Zaragoza",
+    "description": "Physiotherapy center in Zaragoza specialized in sports physiotherapy, EPI, dry needling and MSK ultrasound. Authorized EPI center."
+  },
+  "nav": {
+    "services": "Services",
+    "about": "About",
+    "contact": "Contact",
+    "bookAppointment": "Book Appointment"
+  },
+  "hero": {
+    "badge": "Authorized EPI Center",
+    "title": "Where physiotherapy, health and sport are",
+    "titleHighlight": "one",
+    "description": "Sports and invasive physiotherapy in Zaragoza. Personalized treatments with advanced technology for your recovery and performance.",
+    "bookAppointment": "Book Appointment",
+    "directions": "Get Directions",
+    "tags": {
+      "sportPhysio": "Sports Physiotherapy",
+      "ecoMsk": "MSK Ultrasound",
+      "invasiveEpi": "Invasive & EPI",
+      "manualTherapy": "Manual Therapy"
+    }
+  },
+  "services": {
+    "title": "Our Services",
+    "subtitle": "Specialized treatments with advanced technology for your recovery",
+    "items": {
+      "sportPhysio": {
+        "title": "Sports Physiotherapy",
+        "description": "Specialized treatment for athletes. Prevention, injury recovery and sports performance improvement."
+      },
+      "ecoMsk": {
+        "title": "MSK Ultrasound",
+        "description": "Real-time imaging diagnosis to accurately evaluate musculoskeletal injuries and guide treatments."
+      },
+      "epi": {
+        "title": "EPI",
+        "description": "Percutaneous Intratissue Electrolysis. Authorized EPI center for treatment of tendinopathies and chronic injuries."
+      },
+      "dryNeedling": {
+        "title": "Dry Needling",
+        "description": "Invasive technique for the treatment of myofascial trigger points and chronic muscle pain."
+      },
+      "manualTherapy": {
+        "title": "Manual Therapy",
+        "description": "Specialized manual techniques to relieve pain, improve mobility and restore joint function."
+      },
+      "therapeuticExercise": {
+        "title": "Therapeutic Exercise",
+        "description": "Personalized exercise programs for rehabilitation, injury prevention and physical condition improvement."
+      }
+    }
+  },
+  "about": {
+    "badge": "About Us",
+    "title": "Committed to your recovery",
+    "description1": "At The Rehab Studio we combine clinical experience with the most advanced technology to offer you personalized and effective treatments.",
+    "description2": "Our approach integrates sports physiotherapy, invasive techniques and therapeutic exercise to achieve the best results in your recovery and performance.",
+    "highlights": {
+      "licensed": "Licensed physiotherapist",
+      "epiCenter": "Authorized EPI center",
+      "sportSpecialist": "Sports physiotherapy specialist",
+      "invasiveTraining": "Continuous training in invasive techniques",
+      "mskUltrasound": "Musculoskeletal ultrasound"
+    }
+  },
+  "gallery": {
+    "title": "Our Facilities",
+    "subtitle": "A space designed for your recovery and wellness",
+    "images": {
+      "facade": "The Rehab Studio facade at night",
+      "treatmentRoom": "Treatment room with ultrasound and stretcher",
+      "ultrasound": "Professional ultrasound for MSK diagnosis",
+      "waitingRoom": "Waiting room with modern atmosphere",
+      "equipment": "Therapeutic exercise equipment"
+    }
+  },
+  "contact": {
+    "title": "Contact",
+    "subtitle": "We're here to help you. Book your appointment or visit our clinic.",
+    "address": "Address",
+    "phone": "Phone",
+    "schedule": "Schedule",
+    "weekdays": "Monday - Friday",
+    "saturday": "Saturdays",
+    "byAppointment": "By appointment",
+    "call": "Call"
+  },
+  "booking": {
+    "title": "Book Appointment",
+    "subtitle": "Book online or contact us",
+    "bookOnline": "Book Online",
+    "chooseDatetime": "Choose available date and time",
+    "book": "Book",
+    "orContactDirectly": "or contact us directly",
+    "whatsapp": "WhatsApp",
+    "quickResponse": "Quick response",
+    "open": "Open",
+    "call": "Call",
+    "scheduleTitle": "Opening hours",
+    "mondayFriday": "Monday - Friday",
+    "saturday": "Saturday",
+    "firstConsultation": "First consultation includes complete assessment",
+    "whatsappMessage": "Hello, I would like to book an appointment at The Rehab Studio."
+  },
+  "footer": {
+    "description": "Sports and invasive physiotherapy in Zaragoza",
+    "rights": "All rights reserved."
+  }
+}

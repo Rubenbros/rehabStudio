@@ -1,0 +1,112 @@
+{
+  "metadata": {
+    "title": "The Rehab Studio | Fisioterapia Deportiva e Invasiva en Zaragoza",
+    "description": "Centro de fisioterapia en Zaragoza especializado en fisioterapia deportiva, EPI, punción seca y ecografía MSK. Centro autorizado EPI."
+  },
+  "nav": {
+    "services": "Servicios",
+    "about": "Nosotros",
+    "contact": "Contacto",
+    "bookAppointment": "Reservar Cita"
+  },
+  "hero": {
+    "badge": "Centro Autorizado EPI",
+    "title": "Donde la fisioterapia, la salud y el deporte son",
+    "titleHighlight": "uno",
+    "description": "Fisioterapia deportiva e invasiva en Zaragoza. Tratamientos personalizados con tecnología avanzada para tu recuperación y rendimiento.",
+    "bookAppointment": "Reservar Cita",
+    "directions": "Cómo Llegar",
+    "tags": {
+      "sportPhysio": "Fisioterapia Deportiva",
+      "ecoMsk": "ECO MSK",
+      "invasiveEpi": "Invasiva & EPI",
+      "manualTherapy": "Terapia Manual"
+    }
+  },
+  "services": {
+    "title": "Nuestros Servicios",
+    "subtitle": "Tratamientos especializados con tecnología avanzada para tu recuperación",
+    "items": {
+      "sportPhysio": {
+        "title": "Fisioterapia Deportiva",
+        "description": "Tratamiento especializado para deportistas. Prevención, recuperación de lesiones y mejora del rendimiento deportivo."
+      },
+      "ecoMsk": {
+        "title": "Ecografía MSK",
+        "description": "Diagnóstico por imagen en tiempo real para evaluar lesiones musculoesqueléticas con precisión y guiar tratamientos."
+      },
+      "epi": {
+        "title": "EPI",
+        "description": "Electrólisis Percutánea Intratisular. Centro autorizado EPI para tratamiento de tendinopatías y lesiones crónicas."
+      },
+      "dryNeedling": {
+        "title": "Punción Seca",
+        "description": "Técnica invasiva para el tratamiento de puntos gatillo miofasciales y dolor muscular crónico."
+      },
+      "manualTherapy": {
+        "title": "Terapia Manual",
+        "description": "Técnicas manuales especializadas para aliviar el dolor, mejorar la movilidad y restaurar la función articular."
+      },
+      "therapeuticExercise": {
+        "title": "Ejercicio Terapéutico",
+        "description": "Programas de ejercicios personalizados para rehabilitación, prevención de lesiones y mejora de la condición física."
+      }
+    }
+  },
+  "about": {
+    "badge": "Sobre Nosotros",
+    "title": "Comprometidos con tu recuperación",
+    "description1": "En The Rehab Studio combinamos la experiencia clínica con la tecnología más avanzada para ofrecerte tratamientos personalizados y efectivos.",
+    "description2": "Nuestro enfoque integra la fisioterapia deportiva, las técnicas invasivas y el ejercicio terapéutico para conseguir los mejores resultados en tu recuperación y rendimiento.",
+    "highlights": {
+      "licensed": "Fisioterapeuta colegiado",
+      "epiCenter": "Centro autorizado EPI",
+      "sportSpecialist": "Especialista en fisioterapia deportiva",
+      "invasiveTraining": "Formación continua en técnicas invasivas",
+      "mskUltrasound": "Ecografía musculoesquelética"
+    }
+  },
+  "gallery": {
+    "title": "Nuestras Instalaciones",
+    "subtitle": "Un espacio diseñado para tu recuperación y bienestar",
+    "images": {
+      "facade": "Fachada de The Rehab Studio de noche",
+      "treatmentRoom": "Sala de tratamiento con ecógrafo y camilla",
+      "ultrasound": "Ecógrafo profesional para diagnóstico MSK",
+      "waitingRoom": "Sala de espera con ambiente moderno",
+      "equipment": "Equipamiento para ejercicio terapéutico"
+    }
+  },
+  "contact": {
+    "title": "Contacto",
+    "subtitle": "Estamos aquí para ayudarte. Reserva tu cita o visítanos en nuestra clínica.",
+    "address": "Dirección",
+    "phone": "Teléfono",
+    "schedule": "Horario",
+    "weekdays": "Lunes - Viernes",
+    "saturday": "Sábados",
+    "byAppointment": "Cita previa",
+    "call": "Llamar"
+  },
+  "booking": {
+    "title": "Reservar Cita",
+    "subtitle": "Reserva online o contacta con nosotros",
+    "bookOnline": "Reservar Online",
+    "chooseDatetime": "Elige fecha y hora disponible",
+    "book": "Reservar",
+    "orContactDirectly": "o contacta directamente",
+    "whatsapp": "WhatsApp",
+    "quickResponse": "Respuesta rápida",
+    "open": "Abrir",
+    "call": "Llamar",
+    "scheduleTitle": "Horario de atención",
+    "mondayFriday": "Lunes - Viernes",
+    "saturday": "Sábado",
+    "firstConsultation": "Primera consulta incluye valoración completa",
+    "whatsappMessage": "Hola, me gustaría reservar una cita en The Rehab Studio."
+  },
+  "footer": {
+    "description": "Fisioterapia deportiva e invasiva en Zaragoza",
+    "rights": "Todos los derechos reservados."
+  }
+}
