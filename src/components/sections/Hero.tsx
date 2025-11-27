@@ -1,8 +1,8 @@
 "use client";
 
 import { useTranslations } from "next-intl";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { CalendarDays, MapPin } from "lucide-react";
 import { BookingDialog } from "@/components/booking/BookingDialog";
 
@@ -12,13 +12,18 @@ export function Hero() {
   return (
     <section className="relative min-h-screen overflow-hidden">
       <div className="container relative z-10 mx-auto flex min-h-screen flex-col items-center justify-center px-6 py-32 text-center lg:px-8">
-        <Badge variant="secondary" className="mb-4 rounded-full px-4 py-1">
-          {t("badge")}
-        </Badge>
+        <Image
+          src="/images/email/circulo_transparente.png"
+          alt="The Rehab Studio - Grateful to take care of you"
+          width={180}
+          height={180}
+          className="mb-6 rotate-90"
+          priority
+        />
 
         <h1 className="max-w-4xl text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl lg:text-7xl">
           {t("title")}{" "}
-          <span className="bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
+          <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">
             {t("titleHighlight")}
           </span>
         </h1>

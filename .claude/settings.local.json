@@ -22,7 +22,10 @@
       "Bash(npx vercel:*)",
       "Bash(del \"C:\\Users\\Rubenbros\\IdeaProjects\\rehabStudio\\src\\app\\page.tsx\")",
       "Bash(del \"C:\\Users\\Rubenbros\\IdeaProjects\\rehabStudio\\src\\app\\layout.tsx\")",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(copy:*)",
+      "Bash(cmd /c \"copy \"\"C:\\Users\\Rubenbros\\IdeaProjects\\rehabStudio\\public\\images\\email\\IMG_9841.jpeg\"\" \"\"C:\\Users\\Rubenbros\\IdeaProjects\\rehabStudio\\public\\images\\clinic-room.jpg\"\"\")",
+      "Bash(cmd /c \"dir C:\\Users\\Rubenbros\\IdeaProjects\\rehabStudio\\public\\images\\ | findstr clinic\")"
     ],
     "deny": [],
     "ask": []
