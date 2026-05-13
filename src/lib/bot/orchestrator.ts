@@ -53,6 +53,7 @@ function patientSystemPrompt(
   sessionPrice: number,
   followupPrice: number,
   address: string,
+  ownerPhone: string,
   patient: Patient | null,
 ): string {
   return `You are ${clinic}'s booking assistant on WhatsApp.
@@ -69,7 +70,12 @@ Rules:
   - status="confirmed" → tell the patient it's booked and that you'll send 24h/2h WhatsApp reminders.
   - status="pending_approval" → tell the patient the request was sent to the physio and you'll confirm by WhatsApp shortly (auto-rejected after 2h with no answer).
 - Never promise SMS — only WhatsApp.
+- PHYSIOTHERAPY / MEDICAL QUESTIONS: never give clinical advice. If the patient asks about pain, exercises,
+  injuries, symptoms, treatments, diagnosis, what to do for an injury, recovery, contraindications, second
+  opinions or any medical topic, refuse politely and tell them to contact the physio directly at ${ownerPhone}.
+  You may still help them book / change an appointment in the same reply.
 - Clinic timezone: ${tz}. Address: ${address || "(ask the owner if asked)"}.
+- Clinic contact phone for medical questions: ${ownerPhone}.
 - Reply in the patient's language (Spanish or English). Keep messages short and warm.
 
 Patient context: ${
@@ -125,7 +131,6 @@ export async function loadConversation(phone: string): Promise<Conversation> {
 
 export async function saveConversation(c: Conversation): Promise<void> {
   const sb = supabaseAdmin();
-  // Keep only the last MAX_TURNS messages for the LLM history (system prompt is injected each turn).
   const trimmed = c.messages.slice(-MAX_TURNS);
   await sb
     .from("conversations")
@@ -161,10 +166,6 @@ export interface HandleResult {
   isOwner: boolean;
 }
 
-/**
- * Single entry point: take an inbound WhatsApp message, run DeepSeek with tools,
- * return the text reply to send back. Handles tool-call loops internally.
- */
 export async function handleInbound(phone: string, body: string): Promise<HandleResult> {
   const sb = supabaseAdmin();
   const sanitized = sanitizeUserInput(body);
@@ -175,7 +176,6 @@ export async function handleInbound(phone: string, body: string): Promise<Handle
 
   const conv = await loadConversation(phone);
 
-  // Compose system prompt: role-specific instructions + non-negotiable safety rules.
   const baseSystem = isOwner
     ? ownerSystemPrompt(env.clinicName(), env.clinicTimezone())
     : patientSystemPrompt(
@@ -184,6 +184,7 @@ export async function handleInbound(phone: string, body: string): Promise<Handle
         env.sessionPrice(),
         env.followupPrice(),
         env.clinicAddress(),
+        env.ownerPhone(),
         patient,
       );
 
@@ -199,9 +200,6 @@ export async function handleInbound(phone: string, body: string): Promise<Handle
     content: `Now: ${new Date().toISOString()} (${env.clinicTimezone()})`,
   };
 
-  // For the owner, surface pending approval requests so they can be referenced
-  // naturally ("acepta la de María del sábado") even if a new one arrived while
-  // the conversation was idle.
   const extraSystem: ChatMessage[] = [];
   if (isOwner) {
     const pending = await loadPendingApprovals();
