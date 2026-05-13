@@ -78,7 +78,10 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  if (!authorized(req)) {
+    return new NextResponse("Unauthorized", { status: 401 });
+  }
   return new NextResponse(
     JSON.stringify({
       name: "rehabstudio-mcp",
