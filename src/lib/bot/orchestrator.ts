@@ -8,6 +8,7 @@ import {
   SAFE_REFUSAL,
   looksLikePromptLeak,
   sanitizeUserInput,
+  stripInternalIds,
 } from "./security";
 
 const MAX_TURNS = 20;
@@ -244,6 +245,9 @@ export async function handleInbound(phone: string, body: string): Promise<Handle
   if (looksLikePromptLeak(finalText)) {
     finalText = patient.language === "en" ? SAFE_REFUSAL.en : SAFE_REFUSAL.es;
   }
+
+  // Last-mile: scrub any internal IDs the LLM may have echoed.
+  finalText = stripInternalIds(finalText);
 
   const assistantTurn: ChatMessage = { role: "assistant", content: finalText };
   conv.messages = [...conv.messages, assistantTurn].slice(-MAX_TURNS);
