@@ -1,0 +1,508 @@
+import { z } from "zod";
+import { addDays } from "date-fns";
+import { supabaseAdmin } from "./supabase";
+import {
+  createCalendarEvent,
+  deleteCalendarEvent,
+  listEvents,
+  updateCalendarEvent,
+} from "./calendar";
+import { findAvailableSlots, getSchedule, setSchedule, formatWhen, ScheduleConfig } from "./schedule";
+import { sendWhatsApp } from "./twilio";
+import { env } from "./env";
+import type { ToolSpec } from "./deepseek";
+
+/**
+ * Shared tool layer. Each tool has:
+ *  - `schema` for JSON-schema (used by both DeepSeek tool calling and MCP).
+ *  - `args` Zod validator.
+ *  - `run` implementation.
+ *  - `audience` declaring who can call it.
+ */
+export type Audience = "patient" | "owner" | "both";
+
+export interface Tool<Args, Result> {
+  name: string;
+  description: string;
+  audience: Audience;
+  schema: Record<string, unknown>;
+  args: z.ZodType<Args>;
+  run: (args: Args, ctx: ToolContext) => Promise<Result>;
+}
+
+export interface ToolContext {
+  /** Phone (E.164) of the caller; null when invoked from MCP/owner channel. */
+  callerPhone: string | null;
+  /** Whether the caller has owner privileges. */
+  isOwner: boolean;
+}
+
+// ------------------------------------------------------------------
+// Patient + shared tools
+// ------------------------------------------------------------------
+
+const checkAvailability: Tool<
+  { from?: string; days?: number; duration_min: 30 | 60 },
+  { slots: string[] }
+> = {
+  name: "check_availability",
+  description:
+    "Returns available appointment slots (ISO 8601, clinic timezone) for the given duration within the next N days.",
+  audience: "both",
+  schema: {
+    type: "object",
+    properties: {
+      from: { type: "string", description: "ISO datetime to start searching from. Defaults to now." },
+      days: { type: "integer", description: "How many days ahead to search. Defaults to 14.", default: 14 },
+      duration_min: { type: "integer", enum: [30, 60], description: "30 for follow-up, 60 for full session." },
+    },
+    required: ["duration_min"],
+  },
+  args: z.object({
+    from: z.string().optional(),
+    days: z.number().int().min(1).max(60).optional(),
+    duration_min: z.union([z.literal(30), z.literal(60)]),
+  }),
+  async run({ from, days = 14, duration_min }) {
+    const start = from ? new Date(from) : new Date();
+    const end = addDays(start, days);
+    const slots = await findAvailableSlots(start, end, duration_min);
+    return { slots: slots.slice(0, 12).map((s) => s.toISOString()) };
+  },
+};
+
+const bookAppointment: Tool<
+  {
+    starts_at: string;
+    duration_min: 30 | 60;
+    patient_phone?: string;
+    patient_name?: string;
+    patient_email?: string;
+    notes?: string;
+  },
+  { appointment_id: string; google_event_id: string; when: string; price_eur: number }
+> = {
+  name: "book_appointment",
+  description: "Creates an appointment in Google Calendar and stores the local record.",
+  audience: "both",
+  schema: {
+    type: "object",
+    properties: {
+      starts_at: { type: "string", description: "ISO datetime start." },
+      duration_min: { type: "integer", enum: [30, 60] },
+      patient_phone: { type: "string", description: "E.164 phone. Required if invoked by owner/MCP." },
+      patient_name: { type: "string" },
+      patient_email: { type: "string" },
+      notes: { type: "string" },
+    },
+    required: ["starts_at", "duration_min"],
+  },
+  args: z.object({
+    starts_at: z.string(),
+    duration_min: z.union([z.literal(30), z.literal(60)]),
+    patient_phone: z.string().optional(),
+    patient_name: z.string().optional(),
+    patient_email: z.string().optional(),
+    notes: z.string().optional(),
+  }),
+  async run(input, ctx) {
+    const phone = input.patient_phone ?? ctx.callerPhone;
+    if (!phone) throw new Error("patient_phone is required when no caller phone is in context");
+
+    // Resolve patient.
+    const sb = supabaseAdmin();
+    const { data: patient } = await sb
+      .from("patients")
+      .select("*")
+      .eq("phone", phone)
+      .maybeSingle();
+
+    const name = input.patient_name ?? patient?.full_name ?? "Paciente";
+    const email = input.patient_email ?? patient?.email ?? undefined;
+
+    const startsAt = new Date(input.starts_at);
+    const price = input.duration_min === 60 ? env.sessionPrice() : env.followupPrice();
+
+    const event = await createCalendarEvent({
+      patientName: name,
+      patientEmail: email,
+      patientPhone: phone,
+      startsAt,
+      durationMin: input.duration_min,
+      notes: input.notes,
+    });
+
+    const endsAt = new Date(startsAt.getTime() + input.duration_min * 60_000);
+    const { data: appt, error } = await sb
+      .from("appointments")
+      .insert({
+        patient_id: patient?.id ?? null,
+        patient_phone: phone,
+        patient_name: name,
+        google_event_id: event.id,
+        starts_at: startsAt.toISOString(),
+        ends_at: endsAt.toISOString(),
+        duration_min: input.duration_min,
+        price_eur: price,
+        kind: input.duration_min === 30 ? "followup" : "session",
+        notes: input.notes,
+        confirmation_sent_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+    if (error) throw error;
+
+    return {
+      appointment_id: appt.id,
+      google_event_id: event.id!,
+      when: formatWhen(startsAt),
+      price_eur: price,
+    };
+  },
+};
+
+const listAppointments: Tool<
+  { phone?: string; from?: string; to?: string },
+  { appointments: AppointmentRow[] }
+> = {
+  name: "list_appointments",
+  description:
+    "List appointments. Patient context returns only their own; owner can filter by phone or date range.",
+  audience: "both",
+  schema: {
+    type: "object",
+    properties: {
+      phone: { type: "string", description: "Owner only: filter by patient phone." },
+      from: { type: "string", description: "ISO datetime lower bound. Defaults to now." },
+      to: { type: "string", description: "ISO datetime upper bound. Defaults to +30 days." },
+    },
+  },
+  args: z.object({
+    phone: z.string().optional(),
+    from: z.string().optional(),
+    to: z.string().optional(),
+  }),
+  async run({ phone, from, to }, ctx) {
+    const sb = supabaseAdmin();
+    const fromD = from ? new Date(from) : new Date();
+    const toD = to ? new Date(to) : addDays(fromD, 30);
+    let q = sb
+      .from("appointments")
+      .select("*")
+      .gte("starts_at", fromD.toISOString())
+      .lte("starts_at", toD.toISOString())
+      .neq("status", "cancelled")
+      .order("starts_at");
+    if (!ctx.isOwner && ctx.callerPhone) q = q.eq("patient_phone", ctx.callerPhone);
+    else if (phone) q = q.eq("patient_phone", phone);
+    const { data, error } = await q;
+    if (error) throw error;
+    return { appointments: (data ?? []) as AppointmentRow[] };
+  },
+};
+
+interface AppointmentRow {
+  id: string;
+  patient_phone: string;
+  patient_name: string;
+  starts_at: string;
+  ends_at: string;
+  duration_min: number;
+  price_eur: number;
+  status: string;
+  google_event_id: string;
+  kind: string;
+}
+
+const cancelAppointment: Tool<{ appointment_id: string }, { ok: true }> = {
+  name: "cancel_appointment",
+  description: "Cancels an appointment (deletes the Google event, marks the row cancelled).",
+  audience: "both",
+  schema: {
+    type: "object",
+    properties: { appointment_id: { type: "string" } },
+    required: ["appointment_id"],
+  },
+  args: z.object({ appointment_id: z.string() }),
+  async run({ appointment_id }, ctx) {
+    const sb = supabaseAdmin();
+    const { data: appt, error } = await sb
+      .from("appointments")
+      .select("*")
+      .eq("id", appointment_id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!appt) throw new Error("Appointment not found");
+    if (!ctx.isOwner && ctx.callerPhone && appt.patient_phone !== ctx.callerPhone) {
+      throw new Error("Cannot cancel another patient's appointment");
+    }
+    if (appt.google_event_id) await deleteCalendarEvent(appt.google_event_id);
+    await sb.from("appointments").update({ status: "cancelled", updated_at: new Date().toISOString() }).eq("id", appointment_id);
+    return { ok: true };
+  },
+};
+
+const rescheduleAppointment: Tool<
+  { appointment_id: string; new_starts_at: string; duration_min?: 30 | 60 },
+  { ok: true; when: string }
+> = {
+  name: "reschedule_appointment",
+  description: "Moves an appointment to a new start time.",
+  audience: "both",
+  schema: {
+    type: "object",
+    properties: {
+      appointment_id: { type: "string" },
+      new_starts_at: { type: "string" },
+      duration_min: { type: "integer", enum: [30, 60] },
+    },
+    required: ["appointment_id", "new_starts_at"],
+  },
+  args: z.object({
+    appointment_id: z.string(),
+    new_starts_at: z.string(),
+    duration_min: z.union([z.literal(30), z.literal(60)]).optional(),
+  }),
+  async run({ appointment_id, new_starts_at, duration_min }, ctx) {
+    const sb = supabaseAdmin();
+    const { data: appt } = await sb.from("appointments").select("*").eq("id", appointment_id).maybeSingle();
+    if (!appt) throw new Error("Appointment not found");
+    if (!ctx.isOwner && ctx.callerPhone && appt.patient_phone !== ctx.callerPhone) {
+      throw new Error("Cannot reschedule another patient's appointment");
+    }
+    const startsAt = new Date(new_starts_at);
+    const dur = (duration_min ?? appt.duration_min) as 30 | 60;
+    if (appt.google_event_id) {
+      await updateCalendarEvent(appt.google_event_id, { startsAt, durationMin: dur });
+    }
+    const endsAt = new Date(startsAt.getTime() + dur * 60_000);
+    await sb
+      .from("appointments")
+      .update({
+        starts_at: startsAt.toISOString(),
+        ends_at: endsAt.toISOString(),
+        duration_min: dur,
+        reminder_24h_sent_at: null,
+        reminder_2h_sent_at: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", appointment_id);
+    return { ok: true, when: formatWhen(startsAt) };
+  },
+};
+
+const updatePatient: Tool<
+  { full_name?: string; email?: string; reason?: string; language?: "es" | "en" },
+  { ok: true }
+> = {
+  name: "update_patient",
+  description: "Persist or update patient information (name, email, reason, language).",
+  audience: "both",
+  schema: {
+    type: "object",
+    properties: {
+      full_name: { type: "string" },
+      email: { type: "string" },
+      reason: { type: "string" },
+      language: { type: "string", enum: ["es", "en"] },
+    },
+  },
+  args: z.object({
+    full_name: z.string().optional(),
+    email: z.string().email().optional(),
+    reason: z.string().optional(),
+    language: z.enum(["es", "en"]).optional(),
+  }),
+  async run(input, ctx) {
+    if (!ctx.callerPhone) throw new Error("update_patient requires caller phone");
+    const sb = supabaseAdmin();
+    await sb
+      .from("patients")
+      .upsert(
+        {
+          phone: ctx.callerPhone,
+          full_name: input.full_name,
+          email: input.email,
+          reason: input.reason,
+          language: input.language ?? "es",
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "phone" },
+      );
+    return { ok: true };
+  },
+};
+
+// ------------------------------------------------------------------
+// Owner-only tools
+// ------------------------------------------------------------------
+
+const setWorkingHours: Tool<{ schedule: ScheduleConfig }, { ok: true }> = {
+  name: "set_working_hours",
+  description: "Owner only. Replace the working schedule. Use get_working_hours first to know the shape.",
+  audience: "owner",
+  schema: {
+    type: "object",
+    properties: { schedule: { type: "object" } },
+    required: ["schedule"],
+  },
+  args: z.object({ schedule: z.any() as unknown as z.ZodType<ScheduleConfig> }),
+  async run({ schedule }) {
+    await setSchedule(schedule);
+    return { ok: true };
+  },
+};
+
+const getWorkingHours: Tool<Record<string, never>, ScheduleConfig> = {
+  name: "get_working_hours",
+  description: "Returns the current working schedule.",
+  audience: "owner",
+  schema: { type: "object", properties: {} },
+  args: z.object({}) as unknown as z.ZodType<Record<string, never>>,
+  async run() {
+    return await getSchedule();
+  },
+};
+
+const blockSlot: Tool<{ starts_at: string; ends_at: string; reason?: string }, { event_id: string }> = {
+  name: "block_slot",
+  description: "Owner only. Creates a busy block in Google Calendar (vacation, lunch, etc).",
+  audience: "owner",
+  schema: {
+    type: "object",
+    properties: {
+      starts_at: { type: "string" },
+      ends_at: { type: "string" },
+      reason: { type: "string" },
+    },
+    required: ["starts_at", "ends_at"],
+  },
+  args: z.object({
+    starts_at: z.string(),
+    ends_at: z.string(),
+    reason: z.string().optional(),
+  }),
+  async run({ starts_at, ends_at, reason }) {
+    const startsAt = new Date(starts_at);
+    const dur = ((new Date(ends_at).getTime() - startsAt.getTime()) / 60_000) | 0;
+    const event = await createCalendarEvent({
+      patientName: `BLOQUEADO${reason ? ` — ${reason}` : ""}`,
+      patientPhone: "owner",
+      startsAt,
+      durationMin: (dur >= 60 ? 60 : 30) as 30 | 60,
+      notes: reason,
+    });
+    return { event_id: event.id! };
+  },
+};
+
+const sendManualMessage: Tool<{ phone: string; body: string }, { ok: true }> = {
+  name: "send_manual_message",
+  description: "Owner only. Send a manual WhatsApp message to a patient.",
+  audience: "owner",
+  schema: {
+    type: "object",
+    properties: { phone: { type: "string" }, body: { type: "string" } },
+    required: ["phone", "body"],
+  },
+  args: z.object({ phone: z.string(), body: z.string() }),
+  async run({ phone, body }) {
+    await sendWhatsApp(phone, body);
+    return { ok: true };
+  },
+};
+
+const getStats: Tool<
+  { from?: string; to?: string },
+  { total: number; sessions: number; followups: number; revenue_eur: number; no_shows: number }
+> = {
+  name: "get_stats",
+  description: "Owner only. Aggregate stats for the requested period (defaults: current month).",
+  audience: "owner",
+  schema: {
+    type: "object",
+    properties: { from: { type: "string" }, to: { type: "string" } },
+  },
+  args: z.object({ from: z.string().optional(), to: z.string().optional() }),
+  async run({ from, to }) {
+    const sb = supabaseAdmin();
+    const now = new Date();
+    const fromD = from ? new Date(from) : new Date(now.getFullYear(), now.getMonth(), 1);
+    const toD = to ? new Date(to) : addDays(fromD, 35);
+    const { data } = await sb
+      .from("appointments")
+      .select("duration_min,price_eur,status,kind")
+      .gte("starts_at", fromD.toISOString())
+      .lte("starts_at", toD.toISOString());
+    const rows = data ?? [];
+    const confirmed = rows.filter((r) => r.status !== "cancelled");
+    return {
+      total: confirmed.length,
+      sessions: confirmed.filter((r) => r.kind === "session").length,
+      followups: confirmed.filter((r) => r.kind === "followup").length,
+      revenue_eur: confirmed.reduce((a, r) => a + (r.price_eur ?? 0), 0),
+      no_shows: rows.filter((r) => r.status === "no_show").length,
+    };
+  },
+};
+
+const listCalendarEvents: Tool<{ from: string; to: string }, { events: unknown[] }> = {
+  name: "list_calendar_events",
+  description: "Owner only. Raw Google Calendar events between two timestamps.",
+  audience: "owner",
+  schema: {
+    type: "object",
+    properties: { from: { type: "string" }, to: { type: "string" } },
+    required: ["from", "to"],
+  },
+  args: z.object({ from: z.string(), to: z.string() }),
+  async run({ from, to }) {
+    const events = await listEvents(new Date(from), new Date(to));
+    return { events };
+  },
+};
+
+// ------------------------------------------------------------------
+// Registry
+// ------------------------------------------------------------------
+
+export const ALL_TOOLS = [
+  checkAvailability,
+  bookAppointment,
+  listAppointments,
+  cancelAppointment,
+  rescheduleAppointment,
+  updatePatient,
+  setWorkingHours,
+  getWorkingHours,
+  blockSlot,
+  sendManualMessage,
+  getStats,
+  listCalendarEvents,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+] as unknown as Tool<any, any>[];
+
+export function toolsFor(audience: "patient" | "owner") {
+  return ALL_TOOLS.filter((t) => t.audience === "both" || t.audience === audience);
+}
+
+export function toDeepSeekTools(tools: Tool<unknown, unknown>[]): ToolSpec[] {
+  return tools.map((t) => ({
+    type: "function",
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.schema,
+    },
+  }));
+}
+
+export async function runTool(name: string, rawArgs: unknown, ctx: ToolContext): Promise<unknown> {
+  const tool = ALL_TOOLS.find((t) => t.name === name);
+  if (!tool) throw new Error(`Unknown tool: ${name}`);
+  if (tool.audience === "owner" && !ctx.isOwner) {
+    throw new Error(`Tool ${name} is owner-only`);
+  }
+  const args = tool.args.parse(rawArgs);
+  return await tool.run(args, ctx);
+}
