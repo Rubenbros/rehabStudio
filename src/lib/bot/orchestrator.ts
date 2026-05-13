@@ -32,8 +32,16 @@ interface Conversation {
 function ownerSystemPrompt(clinic: string, tz: string): string {
   return `You are the admin assistant for ${clinic}'s WhatsApp.
 You are talking to the OWNER (the physiotherapist), so you have full privileges:
-- Read full agenda, modify working hours, block slots, cancel/reschedule any appointment.
+- Read full agenda, block slots, cancel/reschedule any appointment.
 - Send manual WhatsApp messages to patients.
+- Approve or reject pending extended-hours requests using approve_appointment / reject_appointment.
+  Match the patient by name and/or datetime when the owner refers to them in natural language
+  (e.g. "acepta la de María del sábado"). If two pending requests match the same description,
+  ask the owner to clarify before acting. The current pending list is provided on every turn.
+- Modify working hours and the core/extended split: each day window has a mode ("core" = auto-confirmed,
+  "extended" = needs owner approval). Workflow: call get_working_hours, modify only the relevant
+  day(s) (keeping the same structure), then call set_working_hours with the FULL updated config.
+  Before saving, summarise the change in plain language and ask the owner to confirm.
 Always confirm destructive actions briefly before doing them. Answer in the owner's language.
 Clinic timezone: ${tz}. Today's ISO date will be provided in the user turn when relevant.
 Be concise. Use bullet lists for agenda listings.`;
@@ -52,9 +60,15 @@ Rules:
 - Pricing: full session 60 min ${sessionPrice}€, follow-up 30 min ${followupPrice}€. Payment is in person.
 - The patient freely chooses 30 or 60 min. Do not contradict them; just confirm what they want.
 - New patients: collect full_name + email (motivo optional). Use the update_patient tool to persist.
-- For booking: use check_availability before suggesting times. Show up to 3 options.
-- Always confirm a slot before calling book_appointment.
-- After booking, do not promise SMS reminders — say WhatsApp reminders.
+- For booking: ALWAYS call check_availability first. Each slot returns its "mode": "core" or "extended".
+  - "core" = standard hours; the booking is confirmed instantly.
+  - "extended" = early morning, evening, or Saturdays; requires the owner's approval.
+  - When proposing an extended slot, tell the patient it's outside the normal schedule and you have to ask the physio first.
+- Always confirm the chosen slot with the patient before calling book_appointment.
+- React to the response of book_appointment:
+  - status="confirmed" → tell the patient it's booked and that you'll send 24h/2h WhatsApp reminders.
+  - status="pending_approval" → tell the patient the request was sent to the physio and you'll confirm by WhatsApp shortly (auto-rejected after 2h with no answer).
+- Never promise SMS — only WhatsApp.
 - Clinic timezone: ${tz}. Address: ${address || "(ask the owner if asked)"}.
 - Reply in the patient's language (Spanish or English). Keep messages short and warm.
 
@@ -67,6 +81,32 @@ Patient context: ${
         })
       : "unknown (new patient)"
   }`;
+}
+
+interface PendingApprovalSummary {
+  appointment_id: string;
+  patient_name: string;
+  patient_phone: string;
+  starts_at: string;
+  duration_min: number;
+  created_at: string;
+}
+
+async function loadPendingApprovals(): Promise<PendingApprovalSummary[]> {
+  const sb = supabaseAdmin();
+  const { data } = await sb
+    .from("appointments")
+    .select("id,patient_name,patient_phone,starts_at,duration_min,created_at")
+    .eq("status", "pending_approval")
+    .order("created_at", { ascending: true });
+  return (data ?? []).map((r) => ({
+    appointment_id: r.id,
+    patient_name: r.patient_name ?? "(sin nombre)",
+    patient_phone: r.patient_phone,
+    starts_at: r.starts_at,
+    duration_min: r.duration_min,
+    created_at: r.created_at,
+  }));
 }
 
 export async function loadConversation(phone: string): Promise<Conversation> {
@@ -136,7 +176,6 @@ export async function handleInbound(phone: string, body: string): Promise<Handle
   const conv = await loadConversation(phone);
 
   // Compose system prompt: role-specific instructions + non-negotiable safety rules.
-  // We put SAFETY_PROMPT last so it has the strongest recency bias.
   const baseSystem = isOwner
     ? ownerSystemPrompt(env.clinicName(), env.clinicTimezone())
     : patientSystemPrompt(
@@ -155,16 +194,31 @@ export async function handleInbound(phone: string, body: string): Promise<Handle
 
   conv.messages.push({ role: "user", content: sanitized });
 
-  // Inject a hint with the current ISO time so the model handles relative dates.
   const timeHint: ChatMessage = {
     role: "system",
     content: `Now: ${new Date().toISOString()} (${env.clinicTimezone()})`,
   };
 
+  // For the owner, surface pending approval requests so they can be referenced
+  // naturally ("acepta la de María del sábado") even if a new one arrived while
+  // the conversation was idle.
+  const extraSystem: ChatMessage[] = [];
+  if (isOwner) {
+    const pending = await loadPendingApprovals();
+    if (pending.length > 0) {
+      extraSystem.push({
+        role: "system",
+        content:
+          `Pending extended-hours approval requests (use approve_appointment / reject_appointment with the appointment_id):\n` +
+          JSON.stringify(pending, null, 2),
+      });
+    }
+  }
+
   const tools = toolsFor(isOwner ? "owner" : "patient");
   const toolSpecs = toDeepSeekTools(tools);
 
-  const messages: ChatMessage[] = [system, timeHint, ...conv.messages];
+  const messages: ChatMessage[] = [system, timeHint, ...extraSystem, ...conv.messages];
   let finalText: string | null = null;
 
   for (let i = 0; i < MAX_TOOL_LOOPS; i++) {
@@ -189,13 +243,10 @@ export async function handleInbound(phone: string, body: string): Promise<Handle
 
   if (!finalText) finalText = patient.language === "en" ? T.notUnderstood.en : T.notUnderstood.es;
 
-  // Output guard: if the model leaked any forbidden substring, replace with a
-  // canned refusal so we never reveal internals.
   if (looksLikePromptLeak(finalText)) {
     finalText = patient.language === "en" ? SAFE_REFUSAL.en : SAFE_REFUSAL.es;
   }
 
-  // Persist only the user + final assistant turn (skip tool noise for readability).
   const assistantTurn: ChatMessage = { role: "assistant", content: finalText };
   conv.messages = [...conv.messages, assistantTurn].slice(-MAX_TURNS);
   await saveConversation(conv);
