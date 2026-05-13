@@ -14,6 +14,7 @@ export const maxDuration = 60;
  *  - 24h reminder (between 22h and 26h before)
  *  - 2h reminder  (between 90 min and 150 min before)
  *  - D+1 follow-up after completed sessions
+ *  - Auto-rejects pending_approval rows older than 2h
  *
  * Idempotent: each branch updates a `*_sent_at` column so it never sends twice.
  */
@@ -29,7 +30,8 @@ export async function GET(req: NextRequest) {
     .select("*, patients(language)")
     .gte("starts_at", now.toISOString())
     .lte("starts_at", horizon.toISOString())
-    .neq("status", "cancelled");
+    .neq("status", "cancelled")
+    .neq("status", "pending_approval");
   if (error) throw error;
 
   let sent24 = 0;
@@ -87,9 +89,37 @@ export async function GET(req: NextRequest) {
     sentFollowup++;
   }
 
+  // Auto-reject pending approvals older than 2h with no owner response.
+  const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+  const { data: stalePending } = await sb
+    .from("appointments")
+    .select("*, patients(language)")
+    .eq("status", "pending_approval")
+    .lte("created_at", twoHoursAgo.toISOString());
+
+  let autoRejected = 0;
+  for (const appt of stalePending ?? []) {
+    const lang = (appt.patients?.language ?? "es") as "es" | "en";
+    await sb
+      .from("appointments")
+      .update({ status: "cancelled", updated_at: new Date().toISOString() })
+      .eq("id", appt.id);
+    const when = formatWhen(new Date(appt.starts_at), lang);
+    const msg =
+      lang === "en"
+        ? `Sorry, we couldn't confirm your requested slot (${when}). Reply with "book" if you'd like another time during regular hours.`
+        : `Lo siento, no hemos podido confirmar el hueco solicitado (${when}). Si quieres otro hueco en horario habitual, dímelo y te lo busco.`;
+    try {
+      await sendWhatsApp(appt.patient_phone, msg);
+    } catch (err) {
+      console.error("[cron] auto-reject notify failed", err);
+    }
+    autoRejected++;
+  }
+
   return NextResponse.json({
     ok: true,
-    sent: { r24: sent24, r2: sent2, followup: sentFollowup },
+    sent: { r24: sent24, r2: sent2, followup: sentFollowup, auto_rejected: autoRejected },
   });
 }
 
