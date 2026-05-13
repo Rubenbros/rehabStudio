@@ -3,6 +3,12 @@ import { runTool, toDeepSeekTools, toolsFor } from "./tools";
 import { supabaseAdmin } from "./supabase";
 import { env } from "./env";
 import { detectLang, Lang, T } from "./i18n";
+import {
+  SAFETY_PROMPT,
+  SAFE_REFUSAL,
+  looksLikePromptLeak,
+  sanitizeUserInput,
+} from "./security";
 
 const MAX_TURNS = 20;
 const MAX_TOOL_LOOPS = 4;
@@ -121,28 +127,33 @@ export interface HandleResult {
  */
 export async function handleInbound(phone: string, body: string): Promise<HandleResult> {
   const sb = supabaseAdmin();
-  await sb.from("message_log").insert({ phone, direction: "inbound", body });
+  const sanitized = sanitizeUserInput(body);
+  await sb.from("message_log").insert({ phone, direction: "inbound", body: sanitized });
 
-  const patient = await loadOrCreatePatient(phone, body);
+  const patient = await loadOrCreatePatient(phone, sanitized);
   const isOwner = patient.is_owner || phone === env.ownerPhone();
 
   const conv = await loadConversation(phone);
 
+  // Compose system prompt: role-specific instructions + non-negotiable safety rules.
+  // We put SAFETY_PROMPT last so it has the strongest recency bias.
+  const baseSystem = isOwner
+    ? ownerSystemPrompt(env.clinicName(), env.clinicTimezone())
+    : patientSystemPrompt(
+        env.clinicName(),
+        env.clinicTimezone(),
+        env.sessionPrice(),
+        env.followupPrice(),
+        env.clinicAddress(),
+        patient,
+      );
+
   const system: ChatMessage = {
     role: "system",
-    content: isOwner
-      ? ownerSystemPrompt(env.clinicName(), env.clinicTimezone())
-      : patientSystemPrompt(
-          env.clinicName(),
-          env.clinicTimezone(),
-          env.sessionPrice(),
-          env.followupPrice(),
-          env.clinicAddress(),
-          patient,
-        ),
+    content: `${baseSystem}\n\n${SAFETY_PROMPT}`,
   };
 
-  conv.messages.push({ role: "user", content: body });
+  conv.messages.push({ role: "user", content: sanitized });
 
   // Inject a hint with the current ISO time so the model handles relative dates.
   const timeHint: ChatMessage = {
@@ -177,6 +188,12 @@ export async function handleInbound(phone: string, body: string): Promise<Handle
   }
 
   if (!finalText) finalText = patient.language === "en" ? T.notUnderstood.en : T.notUnderstood.es;
+
+  // Output guard: if the model leaked any forbidden substring, replace with a
+  // canned refusal so we never reveal internals.
+  if (looksLikePromptLeak(finalText)) {
+    finalText = patient.language === "en" ? SAFE_REFUSAL.en : SAFE_REFUSAL.es;
+  }
 
   // Persist only the user + final assistant turn (skip tool noise for readability).
   const assistantTurn: ChatMessage = { role: "assistant", content: finalText };
