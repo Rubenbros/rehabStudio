@@ -1,95 +1,115 @@
 import { NextRequest, NextResponse } from "next/server";
+import { subDays } from "date-fns";
+import { fromZonedTime, toZonedTime } from "date-fns-tz";
 import { supabaseAdmin } from "@/lib/bot/supabase";
 import { sendWhatsApp } from "@/lib/bot/twilio";
 import { formatWhen } from "@/lib/bot/schedule";
-import { T } from "@/lib/bot/i18n";
 import { env } from "@/lib/bot/env";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
+const REMINDER_HOUR_LOCAL = 19; // 19:00 Madrid time
+
 /**
- * Cron that fires every 30 min. For each upcoming appointment, sends:
- *  - 24h reminder (between 22h and 26h before)
- *  - 2h reminder  (between 90 min and 150 min before)
- *  - D+1 follow-up after completed sessions
- *  - Auto-rejects pending_approval rows older than 2h
+ * Cron triggered every 30 min by GitHub Actions. Three jobs:
  *
- * Idempotent: each branch updates a `*_sent_at` column so it never sends twice.
+ *  1) Day-before reminder: at the first tick after REMINDER_HOUR_LOCAL local
+ *     time, ping every confirmed appointment happening tomorrow.
+ *  2) D+10 follow-up: at the same evening window, ask patients who had a
+ *     session 10 days ago how it went.
+ *  3) Auto-reject pending approvals older than 2h (runs every tick).
+ *
+ *  Idempotent: each branch writes a `*_sent_at` timestamp so it never repeats.
  */
 export async function GET(req: NextRequest) {
   if (!authorized(req)) return new NextResponse("Unauthorized", { status: 401 });
 
   const sb = supabaseAdmin();
   const now = new Date();
-  const horizon = new Date(now.getTime() + 30 * 60 * 60 * 1000); // 30h ahead
+  const tz = env.clinicTimezone();
+  const madridNow = toZonedTime(now, tz);
+  const inEveningWindow =
+    madridNow.getHours() >= REMINDER_HOUR_LOCAL && madridNow.getHours() < REMINDER_HOUR_LOCAL + 1;
 
-  const { data: upcoming, error } = await sb
-    .from("appointments")
-    .select("*, patients(language)")
-    .gte("starts_at", now.toISOString())
-    .lte("starts_at", horizon.toISOString())
-    .neq("status", "cancelled")
-    .neq("status", "pending_approval");
-  if (error) throw error;
+  let sentReminders = 0;
+  let sentFollowups = 0;
+  let autoRejected = 0;
 
-  let sent24 = 0;
-  let sent2 = 0;
+  // 1) DAY-BEFORE REMINDER. Only at 19:00-19:59 Madrid.
+  if (inEveningWindow) {
+    const tomorrowMadrid = new Date(madridNow);
+    tomorrowMadrid.setDate(tomorrowMadrid.getDate() + 1);
+    tomorrowMadrid.setHours(0, 0, 0, 0);
+    const dayAfterTomorrowMadrid = new Date(tomorrowMadrid);
+    dayAfterTomorrowMadrid.setDate(dayAfterTomorrowMadrid.getDate() + 1);
 
-  for (const appt of upcoming ?? []) {
-    const startsAt = new Date(appt.starts_at);
-    const minutesUntil = (startsAt.getTime() - now.getTime()) / 60_000;
-    const lang = (appt.patients?.language ?? "es") as "es" | "en";
-    const whenStr = formatWhen(startsAt, lang);
+    const fromUtc = fromZonedTime(tomorrowMadrid, tz).toISOString();
+    const toUtc = fromZonedTime(dayAfterTomorrowMadrid, tz).toISOString();
 
-    if (!appt.reminder_24h_sent_at && minutesUntil <= 24 * 60 && minutesUntil > 6 * 60) {
-      await sendWhatsApp(appt.patient_phone, T.reminder24[lang](whenStr));
-      await sb
-        .from("appointments")
-        .update({ reminder_24h_sent_at: new Date().toISOString() })
-        .eq("id", appt.id);
-      sent24++;
-    }
-
-    if (!appt.reminder_2h_sent_at && minutesUntil <= 150 && minutesUntil >= 60) {
-      const timeOnly = startsAt.toLocaleTimeString(lang === "en" ? "en-US" : "es-ES", {
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZone: env.clinicTimezone(),
-      });
-      await sendWhatsApp(appt.patient_phone, T.reminder2[lang](timeOnly));
-      await sb
-        .from("appointments")
-        .update({ reminder_2h_sent_at: new Date().toISOString() })
-        .eq("id", appt.id);
-      sent2++;
-    }
-  }
-
-  // Follow-up D+1 for completed/past sessions.
-  const yesterday = new Date(now.getTime() - 26 * 60 * 60 * 1000);
-  const oneDayAgo = new Date(now.getTime() - 22 * 60 * 60 * 1000);
-  const { data: pastDue } = await sb
-    .from("appointments")
-    .select("*, patients(language)")
-    .gte("ends_at", yesterday.toISOString())
-    .lte("ends_at", oneDayAgo.toISOString())
-    .is("followup_sent_at", null)
-    .neq("status", "cancelled");
-
-  let sentFollowup = 0;
-  for (const appt of pastDue ?? []) {
-    const lang = (appt.patients?.language ?? "es") as "es" | "en";
-    await sendWhatsApp(appt.patient_phone, T.followup[lang]);
-    await sb
+    const { data: tomorrowAppts } = await sb
       .from("appointments")
-      .update({ followup_sent_at: new Date().toISOString() })
-      .eq("id", appt.id);
-    sentFollowup++;
+      .select("*, patients(language)")
+      .gte("starts_at", fromUtc)
+      .lt("starts_at", toUtc)
+      .eq("status", "confirmed")
+      .is("reminder_24h_sent_at", null);
+
+    for (const appt of tomorrowAppts ?? []) {
+      const lang = (appt.patients?.language ?? "es") as "es" | "en";
+      const whenStr = formatWhen(new Date(appt.starts_at), lang);
+      const msg =
+        lang === "en"
+          ? `Reminder: your appointment is tomorrow, ${whenStr}. Reply CONFIRM to confirm or CANCEL to cancel.`
+          : `Recordatorio: mañana tienes cita, ${whenStr}. Responde CONFIRMO para confirmar o CANCELAR para cancelar.`;
+      try {
+        await sendWhatsApp(appt.patient_phone, msg);
+        await sb
+          .from("appointments")
+          .update({ reminder_24h_sent_at: new Date().toISOString() })
+          .eq("id", appt.id);
+        sentReminders++;
+      } catch (err) {
+        console.error("[cron] reminder send failed", err);
+      }
+    }
   }
 
-  // Auto-reject pending approvals older than 2h with no owner response.
+  // 2) D+10 FOLLOW-UP. Only at the same evening window so it doesn't ping
+  //    patients at random times of day.
+  if (inEveningWindow) {
+    const tenDaysAgo = subDays(now, 10);
+    const elevenDaysAgo = subDays(now, 11);
+
+    const { data: oldAppts } = await sb
+      .from("appointments")
+      .select("*, patients(language)")
+      .gte("ends_at", elevenDaysAgo.toISOString())
+      .lte("ends_at", tenDaysAgo.toISOString())
+      .eq("status", "confirmed")
+      .is("followup_sent_at", null);
+
+    for (const appt of oldAppts ?? []) {
+      const lang = (appt.patients?.language ?? "es") as "es" | "en";
+      const msg =
+        lang === "en"
+          ? `Hi! It's been 10 days since your session — how have you been feeling? If you need a follow-up I'll happily find you a slot.`
+          : `¡Hola! Han pasado 10 días desde tu última sesión, ¿qué tal te encuentras? Si necesitas otra cita o un seguimiento, dímelo y te busco hueco.`;
+      try {
+        await sendWhatsApp(appt.patient_phone, msg);
+        await sb
+          .from("appointments")
+          .update({ followup_sent_at: new Date().toISOString() })
+          .eq("id", appt.id);
+        sentFollowups++;
+      } catch (err) {
+        console.error("[cron] followup send failed", err);
+      }
+    }
+  }
+
+  // 3) AUTO-REJECT pending approvals older than 2h. Runs every tick.
   const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
   const { data: stalePending } = await sb
     .from("appointments")
@@ -97,7 +117,6 @@ export async function GET(req: NextRequest) {
     .eq("status", "pending_approval")
     .lte("created_at", twoHoursAgo.toISOString());
 
-  let autoRejected = 0;
   for (const appt of stalePending ?? []) {
     const lang = (appt.patients?.language ?? "es") as "es" | "en";
     await sb
@@ -107,7 +126,7 @@ export async function GET(req: NextRequest) {
     const when = formatWhen(new Date(appt.starts_at), lang);
     const msg =
       lang === "en"
-        ? `Sorry, we couldn't confirm your requested slot (${when}). Reply with "book" if you'd like another time during regular hours.`
+        ? `Sorry, we couldn't confirm your requested slot (${when}). Reply "book" if you'd like another time during regular hours.`
         : `Lo siento, no hemos podido confirmar el hueco solicitado (${when}). Si quieres otro hueco en horario habitual, dímelo y te lo busco.`;
     try {
       await sendWhatsApp(appt.patient_phone, msg);
@@ -119,12 +138,17 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     ok: true,
-    sent: { r24: sent24, r2: sent2, followup: sentFollowup, auto_rejected: autoRejected },
+    madrid_now: madridNow.toISOString(),
+    evening_window: inEveningWindow,
+    sent: {
+      reminder_day_before: sentReminders,
+      followup_d10: sentFollowups,
+      auto_rejected: autoRejected,
+    },
   });
 }
 
 function authorized(req: NextRequest): boolean {
-  // Vercel Cron sends `Authorization: Bearer <CRON_SECRET>`.
   const header = req.headers.get("authorization") ?? "";
   return header === `Bearer ${env.cronSecret()}`;
 }
