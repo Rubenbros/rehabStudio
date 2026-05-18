@@ -615,6 +615,145 @@ const listCalendarEvents: Tool<{ from: string; to: string }, { events: unknown[]
   },
 };
 
+// ------------------------------------------------------------------
+// Q&A relay (patient → owner → patient)
+// ------------------------------------------------------------------
+
+interface PendingQuestionRow {
+  id: string;
+  patient_phone: string;
+  patient_name: string | null;
+  question: string;
+  status: string;
+  asked_at: string;
+}
+
+const askOwnerQuestion: Tool<{ question: string }, { ok: true; question_id: string }> = {
+  name: "ask_owner_question",
+  description:
+    "Forwards a question from the patient to the owner (the physiotherapist) via WhatsApp. Use this when the patient asks ANYTHING you cannot or should not answer yourself (medical advice, clinical questions, recommendations, opinions about their condition, etc.). Tell the patient afterwards that you've forwarded the question and you'll reply as soon as the physio answers.",
+  audience: "both",
+  schema: {
+    type: "object",
+    properties: {
+      question: {
+        type: "string",
+        description: "Exact question from the patient, rephrased only if needed for clarity.",
+      },
+    },
+    required: ["question"],
+  },
+  args: z.object({ question: z.string().min(3).max(800) }),
+  async run({ question }, ctx) {
+    if (!ctx.callerPhone) throw new Error("ask_owner_question requires caller phone");
+    const sb = supabaseAdmin();
+    const { data: patient } = await sb
+      .from("patients")
+      .select("full_name")
+      .eq("phone", ctx.callerPhone)
+      .maybeSingle();
+    const name = patient?.full_name ?? "Paciente";
+
+    const { data: row, error } = await sb
+      .from("pending_questions")
+      .insert({
+        patient_phone: ctx.callerPhone,
+        patient_name: name,
+        question,
+        notified_owner_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+    if (error) throw error;
+
+    const ownerMsg =
+      `❓ Pregunta de ${name} (${ctx.callerPhone}):\n` +
+      `«${question}»\n\n` +
+      `Responde aquí y yo se la traslado al paciente.`;
+    try {
+      await sendWhatsApp(env.ownerPhone(), ownerMsg, {
+        kind: "patient_question",
+        question_id: row.id,
+      });
+    } catch (err) {
+      console.error("[askOwnerQuestion] notify owner failed", err);
+    }
+    return { ok: true, question_id: row.id };
+  },
+};
+
+const answerQuestion: Tool<
+  { question_id: string; answer: string },
+  { ok: true }
+> = {
+  name: "answer_question",
+  description:
+    "Owner only. Sends the owner's answer back to the patient who asked. Use this when the owner replies in natural language to a pending question — match it by patient name / content from the injected pending list.",
+  audience: "owner",
+  schema: {
+    type: "object",
+    properties: {
+      question_id: { type: "string" },
+      answer: { type: "string", description: "Owner's answer in their own words." },
+    },
+    required: ["question_id", "answer"],
+  },
+  args: z.object({ question_id: z.string(), answer: z.string().min(1).max(1500) }),
+  async run({ question_id, answer }) {
+    const sb = supabaseAdmin();
+    const { data: q } = await sb
+      .from("pending_questions")
+      .select("*")
+      .eq("id", question_id)
+      .maybeSingle();
+    if (!q) throw new Error("Pending question not found");
+    if (q.status !== "pending") throw new Error(`Question status is ${q.status}`);
+
+    await sb
+      .from("pending_questions")
+      .update({
+        status: "answered",
+        answer,
+        answered_at: new Date().toISOString(),
+      })
+      .eq("id", question_id);
+
+    const { data: patient } = await sb
+      .from("patients")
+      .select("language")
+      .eq("phone", q.patient_phone)
+      .maybeSingle();
+    const lang = (patient?.language ?? "es") as "es" | "en";
+    const msg =
+      lang === "en"
+        ? `The physio replies:\n«${answer}»`
+        : `El fisio te responde:\n«${answer}»`;
+    try {
+      await sendWhatsApp(q.patient_phone, msg, { kind: "question_answered", question_id });
+    } catch (err) {
+      console.error("[answerQuestion] notify patient failed", err);
+    }
+    return { ok: true };
+  },
+};
+
+const listOpenQuestions: Tool<Record<string, never>, { questions: PendingQuestionRow[] }> = {
+  name: "list_open_questions",
+  description: "Owner only. Returns the list of patient questions awaiting an answer, oldest first.",
+  audience: "owner",
+  schema: { type: "object", properties: {} },
+  args: z.object({}) as unknown as z.ZodType<Record<string, never>>,
+  async run() {
+    const sb = supabaseAdmin();
+    const { data } = await sb
+      .from("pending_questions")
+      .select("*")
+      .eq("status", "pending")
+      .order("asked_at", { ascending: true });
+    return { questions: (data ?? []) as PendingQuestionRow[] };
+  },
+};
+
 export const ALL_TOOLS = [
   checkAvailability,
   bookAppointment,
@@ -631,6 +770,9 @@ export const ALL_TOOLS = [
   sendManualMessage,
   getStats,
   listCalendarEvents,
+  askOwnerQuestion,
+  answerQuestion,
+  listOpenQuestions,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ] as unknown as Tool<any, any>[];
 
