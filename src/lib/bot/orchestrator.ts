@@ -39,6 +39,11 @@ You are talking to the OWNER (the physiotherapist), so you have full privileges:
   Match the patient by name and/or datetime when the owner refers to them in natural language
   (e.g. "acepta la de María del sábado"). If two pending requests match the same description,
   ask the owner to clarify before acting. The current pending list is provided on every turn.
+- Answer patient questions: when there are open patient questions (injected on each turn), the
+  owner's natural-language reply is intended for the patient. Call answer_question(question_id, answer)
+  with the right question_id and the owner's wording. If the owner's message clearly does NOT match
+  any open question (e.g. they are giving you an unrelated admin instruction), just handle the admin
+  task and leave the questions alone.
 - Modify working hours and the core/extended split: each day window has a mode ("core" = auto-confirmed,
   "extended" = needs owner approval). Workflow: call get_working_hours, modify only the relevant
   day(s) (keeping the same structure), then call set_working_hours with the FULL updated config.
@@ -66,15 +71,20 @@ Rules:
   - "core" = standard hours; the booking is confirmed instantly.
   - "extended" = early morning, evening, or Saturdays; requires the owner's approval.
   - When proposing an extended slot, tell the patient it's outside the normal schedule and you have to ask the physio first.
+- All slots are ON THE HOUR (08:00, 09:00, 10:00 ... NEVER xx:15 or xx:30). If the patient asks
+  for a non-hour time (e.g. "a las 17:15"), reply offering the nearest hour options ("¿prefieres
+  a las 17:00 o a las 18:00?") and proceed from there. Both 30 min follow-ups and 60 min sessions
+  start on the hour.
 - Always confirm the chosen slot with the patient before calling book_appointment.
 - React to the response of book_appointment:
-  - status="confirmed" → tell the patient it's booked and that you'll send 24h/2h WhatsApp reminders.
+  - status="confirmed" → tell the patient it's booked and that you'll send a reminder the day before in the evening.
   - status="pending_approval" → tell the patient the request was sent to the physio and you'll confirm by WhatsApp shortly (auto-rejected after 2h with no answer).
 - Never promise SMS — only WhatsApp.
-- PHYSIOTHERAPY / MEDICAL QUESTIONS: never give clinical advice. If the patient asks about pain, exercises,
-  injuries, symptoms, treatments, diagnosis, what to do for an injury, recovery, contraindications, second
-  opinions or any medical topic, refuse politely and tell them to contact the physio directly at ${ownerPhone}.
-  You may still help them book / change an appointment in the same reply.
+- PHYSIOTHERAPY / MEDICAL QUESTIONS: never give clinical advice. If the patient asks about pain,
+  exercises, injuries, symptoms, treatments, diagnosis, recovery, contraindications, second opinions
+  or any medical topic, call ask_owner_question with their question. Tell the patient afterwards that
+  you've forwarded it to the physio and you'll reply as soon as he answers. As a fallback for urgent
+  cases tell them they can also call ${ownerPhone}.
 - Clinic timezone: ${tz}. Address: ${address || "(ask the owner if asked)"}.
 - Clinic contact phone for medical questions: ${ownerPhone}.
 - Reply in the patient's language (Spanish or English). Keep messages short and warm.
@@ -113,6 +123,30 @@ async function loadPendingApprovals(): Promise<PendingApprovalSummary[]> {
     starts_at: r.starts_at,
     duration_min: r.duration_min,
     created_at: r.created_at,
+  }));
+}
+
+interface OpenQuestionSummary {
+  question_id: string;
+  patient_name: string;
+  patient_phone: string;
+  question: string;
+  asked_at: string;
+}
+
+async function loadOpenQuestions(): Promise<OpenQuestionSummary[]> {
+  const sb = supabaseAdmin();
+  const { data } = await sb
+    .from("pending_questions")
+    .select("id,patient_name,patient_phone,question,asked_at")
+    .eq("status", "pending")
+    .order("asked_at", { ascending: true });
+  return (data ?? []).map((r) => ({
+    question_id: r.id,
+    patient_name: r.patient_name ?? "(sin nombre)",
+    patient_phone: r.patient_phone,
+    question: r.question,
+    asked_at: r.asked_at,
   }));
 }
 
@@ -203,13 +237,24 @@ export async function handleInbound(phone: string, body: string): Promise<Handle
 
   const extraSystem: ChatMessage[] = [];
   if (isOwner) {
-    const pending = await loadPendingApprovals();
+    const [pending, openQs] = await Promise.all([
+      loadPendingApprovals(),
+      loadOpenQuestions(),
+    ]);
     if (pending.length > 0) {
       extraSystem.push({
         role: "system",
         content:
           `Pending extended-hours approval requests (use approve_appointment / reject_appointment with the appointment_id):\n` +
           JSON.stringify(pending, null, 2),
+      });
+    }
+    if (openQs.length > 0) {
+      extraSystem.push({
+        role: "system",
+        content:
+          `Open patient questions waiting for an answer. If the owner's reply addresses any of these, call answer_question(question_id, answer) with the owner's wording — do not paraphrase. Match by name or topic; if ambiguous, ask the owner which one they meant.\n` +
+          JSON.stringify(openQs, null, 2),
       });
     }
   }
