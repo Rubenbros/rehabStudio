@@ -15,10 +15,6 @@ Son **4 bloques**:
 Tiempo aproximado: **30–45 minutos** repartidos (la verificación de Meta tarda
 unos días, pero eso va por su cuenta).
 
-> 🔒 **Muy importante sobre seguridad:** algunas de las claves que vas a copiar
-> son como contraseñas. **No me las mandes por WhatsApp ni por email normal.**
-> Al final de la guía te explico cómo enviármelas de forma segura.
-
 ---
 
 ## BLOQUE 1 — WhatsApp oficial (Meta)
@@ -95,11 +91,12 @@ cuenta y meter un poco de saldo.
    Google).
 2. Ve a la sección de **facturación / "Billing"** y añade un saldo inicial
    pequeño (con **5 €/$** sobra para empezar muchísimo tiempo).
-3. Ve a **API Keys** → **Create new API key** (Crear clave).
+3. Ve a **API Keys** (**https://platform.deepseek.com/api_keys**) → **Create new
+   API key**.
 4. Ponle un nombre cualquiera (ej. "rehab-bot") y **copia la clave** que empieza
    por `sk-...`.
    - ⚠️ Solo se muestra una vez. Cópiala bien.
-5. Esa clave **me la envías de forma segura** (ver último apartado).
+5. Pásame esa clave.
 
 > Esta cuenta queda a tu nombre, así que el gasto de la IA es tuyo y siempre
 > tienes el control. Si prefieres que lo gestione yo, dímelo y me encargo.
@@ -127,8 +124,7 @@ la agenda "oficial". Tu parte aquí es **mínima**.
 
 ## BLOQUE 4 — Datos de la clínica (formulario)
 
-Cópiame esto rellenado (esto **no es secreto**, me lo puedes pasar por donde
-quieras):
+Cópiame esto rellenado:
 
 ```
 - Nombre comercial de la clínica:        (ej. The Rehab Studio)
@@ -151,20 +147,6 @@ quieras):
 
 ---
 
-## Cómo enviarme las claves de forma SEGURA
-
-La **clave de DeepSeek** (`sk-...`) y cualquier token de Meta son sensibles.
-**No los mandes por WhatsApp, SMS ni email normal.** Usa una de estas opciones:
-
-- **https://onetimesecret.com** → pega la clave, genera un enlace de "un solo
-  uso" y me pasas ese enlace. (Es gratis y el enlace se autodestruye al abrirlo.)
-- O un gestor de contraseñas compartido, si usas alguno.
-
-Los datos del Bloque 4 (nombre, dirección, precios…) no son secretos y me los
-puedes pasar normal.
-
----
-
 ## RESUMEN — tu checklist
 
 - [ ] **WhatsApp:** conseguir un número nuevo para el bot
@@ -172,8 +154,7 @@ puedes pasar normal.
 - [ ] **WhatsApp:** iniciar la verificación del negocio (con tus datos legales)
 - [ ] **WhatsApp:** añadirme como administrador ([PON_AQUÍ_MI_CORREO])
 - [ ] **WhatsApp:** pasarme el código de verificación cuando te lo pida
-- [ ] **DeepSeek:** crear cuenta, meter ~5 € de saldo y enviarme la clave `sk-...`
-      (de forma segura)
+- [ ] **DeepSeek:** crear cuenta, meter ~5 € de saldo y pasarme la clave `sk-...`
 - [ ] **Google:** decirme el correo de Google de la agenda y autorizar con el
       enlace que te envíe
 - [ ] **Datos clínica:** enviarme el formulario del Bloque 4 relleno
