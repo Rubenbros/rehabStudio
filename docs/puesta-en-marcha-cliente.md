@@ -112,13 +112,12 @@ la agenda "oficial". Tu parte aquí es **mínima**.
    - Puede ser tu Gmail actual, o
    - Una cuenta de Google nueva solo para la clínica (recomendado si quieres
      separar lo personal de lo profesional).
-2. Dime cuál es ese correo de Google.
-3. Yo prepararé la conexión y **te enviaré un enlace**.
-4. Tú **abres ese enlace**, inicias sesión con esa cuenta de Google y pulsas
-   **"Permitir"**. Listo.
+2. **Dime ese correo de Google primero** (lo necesito para habilitarte el acceso).
+3. Cuando te confirme, abre este enlace, inicia sesión con esa cuenta y pulsa
+   **"Permitir"**:
+   **https://therehabstudio.es/api/google/oauth/start**
 
-> No tienes que configurar nada en Google tú; solo autorizar con un clic cuando te
-> pase el enlace.
+> No tienes que configurar nada en Google tú; solo autorizar con un clic.
 
 ---
 
