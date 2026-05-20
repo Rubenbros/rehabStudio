@@ -4,7 +4,7 @@ End-to-end automation for rehabStudio:
 
 - Patients book / reschedule / cancel via WhatsApp.
 - DeepSeek powers the conversation; Google Calendar is the source of truth.
-- Twilio sends/receives WhatsApp messages.
+- WhatsApp Cloud API (Meta) sends/receives WhatsApp messages.
 - Supabase stores patients, conversation state and an appointment mirror.
 - Owner controls the agenda from WhatsApp (privileged commands) **or** from
   Claude via an MCP server.
@@ -13,11 +13,11 @@ End-to-end automation for rehabStudio:
 
 ```
 Patient WhatsApp ─┐                         ┌─► Google Calendar API
-                  │  Twilio webhook         │
+                  │  Meta webhook (JSON)    │
                   ▼                         │
-        /api/twilio/webhook ──► DeepSeek (tool calling) ──► Supabase
+        /api/whatsapp/webhook ──► DeepSeek (tool calling) ──► Supabase
                   ▲                         │
-                  │  Twilio REST            └─► Twilio (outbound)
+                  │  Graph API              └─► WhatsApp Cloud API (outbound)
                   │
 Owner (Claude)  ──┴──► /api/mcp (HTTP MCP, bearer auth) ──► same tools
 
@@ -44,35 +44,49 @@ Vercel Cron ──► /api/cron/reminders  (24h / 2h / D+1 follow-up)
    Paste it into `GOOGLE_REFRESH_TOKEN` and redeploy.
 6. (Optional) set `GOOGLE_CALENDAR_ID` if not using the primary calendar.
 
-### 2.3 Twilio WhatsApp
+### 2.3 WhatsApp Cloud API (Meta)
 
-**Dev / sandbox (free):**
+**Setup:**
 
-1. Twilio console → Messaging → Try it out → **Send a WhatsApp message**.
-2. Activate the sandbox; join from your phone by sending `join <code>` to
-   `+1 415 523 8886`.
-3. Sandbox settings:
-   - **When a message comes in**: `https://YOUR-DOMAIN/api/twilio/webhook` (POST)
-   - **Status callback URL**: leave blank.
-4. Env vars:
-   - `TWILIO_WHATSAPP_FROM=whatsapp:+14155238886`
+1. <https://developers.facebook.com> → create an app of type **Business**.
+2. Add the **WhatsApp** product. This creates a test number you can use for dev.
+3. **API Setup** tab: copy the **Phone number ID** → `WHATSAPP_PHONE_NUMBER_ID`.
+   Generate a permanent **System User access token** (Business Settings → Users →
+   System users) with `whatsapp_business_messaging` permission →
+   `WHATSAPP_ACCESS_TOKEN`. (The temporary 24h token shown on the tab is fine for
+   a quick test only.)
+4. **App → Settings → Basic**: copy the **App secret** → `WHATSAPP_APP_SECRET`.
+5. Choose any random string for `WHATSAPP_VERIFY_TOKEN`.
+6. **WhatsApp → Configuration → Webhook**:
+   - **Callback URL**: `https://YOUR-DOMAIN/api/whatsapp/webhook`
+   - **Verify token**: the same value as `WHATSAPP_VERIFY_TOKEN`.
+   - Click **Verify and save** (Meta calls the GET handler with `hub.challenge`).
+   - **Subscribe** the webhook field **messages**.
+7. For dev with a local server, expose it (`ngrok http 3000`) and use the public
+   URL as the callback. Set `WHATSAPP_VALIDATE_SIGNATURE=false` only if you need
+   to bypass the HMAC check locally.
 
 **Production (real number):**
 
-1. Twilio → Senders → **Request WhatsApp Sender**.
+1. **WhatsApp → API Setup → Add phone number**, then verify the new business
+   number by SMS/voice. A number can only live on one platform at a time — if it
+   is currently on the WhatsApp app or another BSP, remove it there first.
 2. You'll need a Meta Business Manager with a verified business (~3-7 days).
-3. Submit and approve message templates for outbound notifications. The bot
-   uses these template names (register them in Twilio Content Builder):
-   - `confirmacion_cita` / `confirmation_appointment`
-   - `recordatorio_24h` / `reminder_24h`
-   - `recordatorio_2h` / `reminder_2h`
-   - `followup_post_sesion` / `followup_post_session`
-4. Once approved, swap `TWILIO_WHATSAPP_FROM` to the new number
-   (e.g. `whatsapp:+34911234567`).
+3. Submit and approve message templates (category **Utility**) for the outbound
+   notifications sent outside the 24h window. The reminders route needs:
+   - confirmation
+   - 24h reminder
+   - D+10 follow-up
+   - auto-reject / slot-not-confirmed notice
+   - (owner side) patient-question forward, pending-approval notice
 
 > Note: WhatsApp Business policy only allows free-form replies within the 24h
-> conversation window after the user's last message. Outside that window you
-> **must** use approved templates — the reminders route is the typical culprit.
+> conversation window after the user's last message. The current code sends
+> free-form text everywhere, which covers all in-window conversation. The
+> proactive `/api/cron/reminders` messages (and owner notifications when the
+> owner has been quiet >24h) fall outside that window and **require approved
+> templates** in production — wire a `sendTemplate` helper once the templates
+> above are approved.
 
 ### 2.4 DeepSeek
 
@@ -86,7 +100,7 @@ Vercel Cron ──► /api/cron/reminders  (24h / 2h / D+1 follow-up)
 # Local dev
 npm install
 cp .env.example .env.local   # fill in values
-npm run dev                  # then expose with `ngrok http 3000` for Twilio webhook
+npm run dev                  # then expose with `ngrok http 3000` for the Meta webhook
 ```
 
 ```bash
@@ -177,10 +191,10 @@ curl -X POST https://YOUR-DOMAIN/api/mcp \
 
 - Cron `*/30 * * * *` is supported on Vercel Hobby. Free tier allows up to 2
   cron jobs and 1-minute granularity, so this fits.
-- The webhook responds immediately to Twilio and processes the conversation
+- The webhook responds immediately to Meta and processes the conversation
   asynchronously. On Vercel Hobby, the background work uses the same lambda
   invocation (capped at 10s). If you see truncated responses, set
   `maxDuration` on the route or upgrade to Pro.
-- All outbound reminders bypass the LLM and use static templates — keep them
-  registered in Twilio for production use.
+- All outbound reminders bypass the LLM and use static text. In production these
+  fire outside the 24h window and must be sent as approved Meta templates.
 - Cancellation is unlimited (no penalty) per the owner's policy.

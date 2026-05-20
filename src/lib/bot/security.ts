@@ -1,16 +1,22 @@
-import twilio from "twilio";
+import crypto from "crypto";
 import { supabaseAdmin } from "./supabase";
 import { env } from "./env";
 
-export function verifyTwilioSignature(
-  url: string,
-  params: Record<string, string>,
-  signature: string,
-): boolean {
-  if (process.env.TWILIO_VALIDATE_SIGNATURE === "false") return true;
+/**
+ * Validate Meta's `X-Hub-Signature-256` header, which is
+ * `sha256=` + HMAC-SHA256(appSecret, rawBody). The HMAC must be computed over
+ * the exact raw request bytes, so callers must pass the unparsed body.
+ */
+export function verifyMetaSignature(rawBody: string, signature: string): boolean {
+  if (process.env.WHATSAPP_VALIDATE_SIGNATURE === "false") return true;
   if (!signature) return false;
   try {
-    return twilio.validateRequest(env.twilioToken(), signature, url, params);
+    const expected =
+      "sha256=" +
+      crypto.createHmac("sha256", env.whatsappAppSecret()).update(rawBody, "utf8").digest("hex");
+    const a = Buffer.from(signature);
+    const b = Buffer.from(expected);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
   } catch {
     return false;
   }
@@ -86,7 +92,6 @@ const FORBIDDEN_OUT = [
   "owner_phone",
   "owner_email",
   "supabase",
-  "twilio",
   "service_role",
   "api key",
   "bearer ",

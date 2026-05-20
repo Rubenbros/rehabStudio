@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { subDays } from "date-fns";
 import { fromZonedTime, toZonedTime } from "date-fns-tz";
 import { supabaseAdmin } from "@/lib/bot/supabase";
-import { sendWhatsApp } from "@/lib/bot/twilio";
+import { sendWhatsApp } from "@/lib/bot/whatsapp";
 import { formatWhen } from "@/lib/bot/schedule";
 import { env } from "@/lib/bot/env";
 

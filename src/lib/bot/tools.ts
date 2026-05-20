@@ -15,7 +15,7 @@ import {
   modeForStartTime,
   ScheduleConfig,
 } from "./schedule";
-import { sendWhatsApp } from "./twilio";
+import { sendWhatsApp } from "./whatsapp";
 import { env } from "./env";
 import type { ToolSpec } from "./deepseek";
 

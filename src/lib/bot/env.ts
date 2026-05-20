@@ -13,9 +13,11 @@ export const env = {
   supabaseAnonKey: () => required("NEXT_PUBLIC_SUPABASE_ANON_KEY"),
   supabaseServiceKey: () => required("SUPABASE_SERVICE_ROLE_KEY"),
 
-  twilioSid: () => required("TWILIO_ACCOUNT_SID"),
-  twilioToken: () => required("TWILIO_AUTH_TOKEN"),
-  twilioFrom: () => required("TWILIO_WHATSAPP_FROM"),
+  whatsappPhoneNumberId: () => required("WHATSAPP_PHONE_NUMBER_ID"),
+  whatsappToken: () => required("WHATSAPP_ACCESS_TOKEN"),
+  whatsappVerifyToken: () => required("WHATSAPP_VERIFY_TOKEN"),
+  whatsappAppSecret: () => required("WHATSAPP_APP_SECRET"),
+  whatsappApiVersion: () => optional("WHATSAPP_API_VERSION", "v21.0"),
 
   deepseekKey: () => required("DEEPSEEK_API_KEY"),
   deepseekModel: () => optional("DEEPSEEK_MODEL", "deepseek-chat"),
