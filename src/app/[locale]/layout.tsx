@@ -11,8 +11,6 @@ import {
   BreadcrumbJsonLd,
 } from "@/components/seo/JsonLd";
 import { UltrasoundBackground } from "@/components/animations/UltrasoundBackground";
-import { Analytics } from "@vercel/analytics/react";
-import { SpeedInsights } from "@vercel/speed-insights/next";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -151,8 +149,6 @@ export default async function LocaleLayout({
           <WebsiteJsonLd />
           <BreadcrumbJsonLd />
           {children}
-          <Analytics />
-          <SpeedInsights />
         </NextIntlClientProvider>
       </body>
     </html>
