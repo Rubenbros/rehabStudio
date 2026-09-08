@@ -9,9 +9,11 @@ function optional(name: string, fallback = ""): string {
 }
 
 export const env = {
-  supabaseUrl: () => required("NEXT_PUBLIC_SUPABASE_URL"),
-  supabaseAnonKey: () => required("NEXT_PUBLIC_SUPABASE_ANON_KEY"),
-  supabaseServiceKey: () => required("SUPABASE_SERVICE_ROLE_KEY"),
+  /**
+   * Cloud SQL (PostgreSQL). En Cloud Run va por socket Unix del conector:
+   * postgresql://user:pass@localhost/db?host=/cloudsql/<INSTANCE_CONNECTION_NAME>
+   */
+  databaseUrl: () => required("DATABASE_URL"),
 
   twilioSid: () => required("TWILIO_ACCOUNT_SID"),
   twilioToken: () => required("TWILIO_AUTH_TOKEN"),

@@ -5,7 +5,7 @@ End-to-end automation for rehabStudio:
 - Patients book / reschedule / cancel via WhatsApp.
 - DeepSeek powers the conversation; Google Calendar is the source of truth.
 - Twilio sends/receives WhatsApp messages.
-- Supabase stores patients, conversation state and an appointment mirror.
+- Cloud SQL (PostgreSQL) stores patients, conversation state and an appointment mirror.
 - Owner controls the agenda from WhatsApp (privileged commands) **or** from
   Claude via an MCP server.
 
@@ -15,22 +15,40 @@ End-to-end automation for rehabStudio:
 Patient WhatsApp ─┐                         ┌─► Google Calendar API
                   │  Twilio webhook         │
                   ▼                         │
-        /api/twilio/webhook ──► DeepSeek (tool calling) ──► Supabase
+        /api/twilio/webhook ──► DeepSeek (tool calling) ──► Cloud SQL
                   ▲                         │
                   │  Twilio REST            └─► Twilio (outbound)
                   │
 Owner (Claude)  ──┴──► /api/mcp (HTTP MCP, bearer auth) ──► same tools
 
-Vercel Cron ──► /api/cron/reminders  (24h / 2h / D+1 follow-up)
+Cloud Scheduler ──► /api/cron/reminders  (day-before / D+10 / auto-reject)
 ```
 
 ## 2. Provision the dependencies
 
-### 2.1 Supabase
+### 2.1 Cloud SQL (PostgreSQL)
 
-1. Create a project (free tier).
-2. Settings → API: copy `URL`, `anon` key, `service_role` key into env vars.
-3. SQL editor → run `supabase/migrations/0001_init.sql`.
+The database lives in the shared Cloud SQL instance
+`t800labsweb:europe-west1:t800labs-pg` (PostgreSQL 17), with its own database
+`rehab` and user `rehab_app`.
+
+1. Build `DATABASE_URL`:
+   - Locally, through the Cloud SQL Auth Proxy:
+     `postgresql://rehab_app:PASSWORD@127.0.0.1:5433/rehab`
+   - On Cloud Run, through the connector's Unix socket:
+     `postgresql://rehab_app:PASSWORD@localhost/rehab?host=/cloudsql/t800labsweb:europe-west1:t800labs-pg`
+2. Apply the schema (idempotent, no psql needed):
+
+   ```bash
+   npm run db:schema
+   ```
+
+   The DDL lives in `db/schema.sql`; the old Supabase migrations are kept in
+   `db/legacy/` for history only. The `config` row holding the working schedule
+   is **not** seeded: it travels with the data migration.
+3. The Cloud Run runtime service account needs `roles/cloudsql.client`, and the
+   deploy passes `--add-cloudsql-instances`. `DATABASE_URL` is injected from
+   Secret Manager.
 
 ### 2.2 Google Calendar
 
@@ -90,14 +108,22 @@ npm run dev                  # then expose with `ngrok http 3000` for Twilio web
 ```
 
 ```bash
-# Vercel
-vercel link
-vercel env add ...           # add every var from .env.example
-vercel --prod
+# Checks before pushing
+npm run lint
+npx tsc --noEmit
+npm test                     # add DATABASE_URL_TEST to also run the DB test
+npm run build
 ```
 
-Vercel cron (already declared in `vercel.json`) runs every 30 minutes and
-authenticates itself with `CRON_SECRET` automatically — no manual setup needed.
+Production deploys are automatic: pushing to `master` triggers
+`.github/workflows/deploy-cloudrun.yml`, which builds the image, pushes it to
+Artifact Registry and runs `gcloud run deploy` (region `europe-west1`, service
+`rehab-studio`). Plain settings come from GitHub `vars`, secrets from Secret
+Manager.
+
+The reminders cron is the Cloud Scheduler job `rehab-reminders`: every 30
+minutes it calls `/api/cron/reminders` with `Authorization: Bearer $CRON_SECRET`.
+It is provisioned outside this repository, so there is nothing to deploy for it.
 
 ## 4. Owner privileges
 
@@ -133,7 +159,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`
       "args": ["/absolute/path/to/scripts/mcp-stdio-bridge.mjs"],
       "env": {
         "MCP_URL": "https://YOUR-DOMAIN/api/mcp",
-        "MCP_BEARER_TOKEN": "<the same token as in Vercel>"
+        "MCP_BEARER_TOKEN": "<the same token as in Cloud Run>"
       }
     }
   }
@@ -175,12 +201,14 @@ curl -X POST https://YOUR-DOMAIN/api/mcp \
 
 ## 7. Notes & limitations
 
-- Cron `*/30 * * * *` is supported on Vercel Hobby. Free tier allows up to 2
-  cron jobs and 1-minute granularity, so this fits.
-- The webhook responds immediately to Twilio and processes the conversation
-  asynchronously. On Vercel Hobby, the background work uses the same lambda
-  invocation (capped at 10s). If you see truncated responses, set
-  `maxDuration` on the route or upgrade to Pro.
+- The reminders cron runs every 30 minutes from Cloud Scheduler. The route
+  rejects anything whose `Authorization` header is not exactly
+  `Bearer $CRON_SECRET`, so the job and the secret must stay in sync.
+- The webhook answers Twilio immediately and processes the conversation in the
+  background with `after()`. The route sets `maxDuration = 60`; Cloud Run is
+  configured with `--timeout 120`, so there is room.
+- The `pg` pool is created lazily and capped at 5 connections because the Cloud
+  SQL instance is shared with other apps.
 - All outbound reminders bypass the LLM and use static templates — keep them
   registered in Twilio for production use.
 - Cancellation is unlimited (no penalty) per the owner's policy.

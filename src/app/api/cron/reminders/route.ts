@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { subDays } from "date-fns";
 import { fromZonedTime, toZonedTime } from "date-fns-tz";
-import { supabaseAdmin } from "@/lib/bot/supabase";
+import {
+  listConfirmedNeedingFollowup,
+  listConfirmedNeedingReminder,
+  listStalePendingApprovals,
+  updateAppointment,
+} from "@/lib/bot/repo/appointments";
 import { sendWhatsApp } from "@/lib/bot/twilio";
 import { formatWhen } from "@/lib/bot/schedule";
 import { env } from "@/lib/bot/env";
@@ -26,7 +31,6 @@ const REMINDER_HOUR_LOCAL = 19; // 19:00 Madrid time
 export async function GET(req: NextRequest) {
   if (!authorized(req)) return new NextResponse("Unauthorized", { status: 401 });
 
-  const sb = supabaseAdmin();
   const now = new Date();
   const tz = env.clinicTimezone();
   const madridNow = toZonedTime(now, tz);
@@ -48,15 +52,9 @@ export async function GET(req: NextRequest) {
     const fromUtc = fromZonedTime(tomorrowMadrid, tz).toISOString();
     const toUtc = fromZonedTime(dayAfterTomorrowMadrid, tz).toISOString();
 
-    const { data: tomorrowAppts } = await sb
-      .from("appointments")
-      .select("*, patients(language)")
-      .gte("starts_at", fromUtc)
-      .lt("starts_at", toUtc)
-      .eq("status", "confirmed")
-      .is("reminder_24h_sent_at", null);
+    const tomorrowAppts = await listConfirmedNeedingReminder({ from: fromUtc, to: toUtc });
 
-    for (const appt of tomorrowAppts ?? []) {
+    for (const appt of tomorrowAppts) {
       const lang = (appt.patients?.language ?? "es") as "es" | "en";
       const whenStr = formatWhen(new Date(appt.starts_at), lang);
       const msg =
@@ -65,10 +63,7 @@ export async function GET(req: NextRequest) {
           : `Recordatorio: mañana tienes cita, ${whenStr}. Responde CONFIRMO para confirmar o CANCELAR para cancelar.`;
       try {
         await sendWhatsApp(appt.patient_phone, msg);
-        await sb
-          .from("appointments")
-          .update({ reminder_24h_sent_at: new Date().toISOString() })
-          .eq("id", appt.id);
+        await updateAppointment(appt.id, { reminder_24h_sent_at: new Date().toISOString() });
         sentReminders++;
       } catch (err) {
         console.error("[cron] reminder send failed", err);
@@ -82,15 +77,12 @@ export async function GET(req: NextRequest) {
     const tenDaysAgo = subDays(now, 10);
     const elevenDaysAgo = subDays(now, 11);
 
-    const { data: oldAppts } = await sb
-      .from("appointments")
-      .select("*, patients(language)")
-      .gte("ends_at", elevenDaysAgo.toISOString())
-      .lte("ends_at", tenDaysAgo.toISOString())
-      .eq("status", "confirmed")
-      .is("followup_sent_at", null);
+    const oldAppts = await listConfirmedNeedingFollowup({
+      from: elevenDaysAgo.toISOString(),
+      to: tenDaysAgo.toISOString(),
+    });
 
-    for (const appt of oldAppts ?? []) {
+    for (const appt of oldAppts) {
       const lang = (appt.patients?.language ?? "es") as "es" | "en";
       const msg =
         lang === "en"
@@ -98,10 +90,7 @@ export async function GET(req: NextRequest) {
           : `¡Hola! Han pasado 10 días desde tu última sesión, ¿qué tal te encuentras? Si necesitas otra cita o un seguimiento, dímelo y te busco hueco.`;
       try {
         await sendWhatsApp(appt.patient_phone, msg);
-        await sb
-          .from("appointments")
-          .update({ followup_sent_at: new Date().toISOString() })
-          .eq("id", appt.id);
+        await updateAppointment(appt.id, { followup_sent_at: new Date().toISOString() });
         sentFollowups++;
       } catch (err) {
         console.error("[cron] followup send failed", err);
@@ -111,18 +100,14 @@ export async function GET(req: NextRequest) {
 
   // 3) AUTO-REJECT pending approvals older than 2h. Runs every tick.
   const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
-  const { data: stalePending } = await sb
-    .from("appointments")
-    .select("*, patients(language)")
-    .eq("status", "pending_approval")
-    .lte("created_at", twoHoursAgo.toISOString());
+  const stalePending = await listStalePendingApprovals(twoHoursAgo.toISOString());
 
-  for (const appt of stalePending ?? []) {
+  for (const appt of stalePending) {
     const lang = (appt.patients?.language ?? "es") as "es" | "en";
-    await sb
-      .from("appointments")
-      .update({ status: "cancelled", updated_at: new Date().toISOString() })
-      .eq("id", appt.id);
+    await updateAppointment(appt.id, {
+      status: "cancelled",
+      updated_at: new Date().toISOString(),
+    });
     const when = formatWhen(new Date(appt.starts_at), lang);
     const msg =
       lang === "en"
