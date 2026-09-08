@@ -1,5 +1,5 @@
 import twilio from "twilio";
-import { supabaseAdmin } from "./supabase";
+import { countInboundSince } from "./repo/messageLog";
 import { env } from "./env";
 
 export function verifyTwilioSignature(
@@ -29,28 +29,20 @@ const LIMITS = {
 };
 
 export async function checkRateLimit(phone: string): Promise<RateLimitDecision> {
-  const sb = supabaseAdmin();
   const now = new Date();
   const minuteAgo = new Date(now.getTime() - 60_000);
   const hourAgo = new Date(now.getTime() - 60 * 60_000);
   const dayAgo = new Date(now.getTime() - 24 * 60 * 60_000);
 
-  const baseQuery = () =>
-    sb
-      .from("message_log")
-      .select("id", { count: "exact", head: true })
-      .eq("phone", phone)
-      .eq("direction", "inbound");
-
-  const [{ count: cMin }, { count: cHour }, { count: cDay }] = await Promise.all([
-    baseQuery().gte("created_at", minuteAgo.toISOString()),
-    baseQuery().gte("created_at", hourAgo.toISOString()),
-    baseQuery().gte("created_at", dayAgo.toISOString()),
+  const [cMin, cHour, cDay] = await Promise.all([
+    countInboundSince(phone, minuteAgo.toISOString()),
+    countInboundSince(phone, hourAgo.toISOString()),
+    countInboundSince(phone, dayAgo.toISOString()),
   ]);
 
-  if ((cMin ?? 0) >= LIMITS.perMinute) return { allowed: false, reason: "per_minute", retryAfterSec: 60 };
-  if ((cHour ?? 0) >= LIMITS.perHour) return { allowed: false, reason: "per_hour", retryAfterSec: 60 * 60 };
-  if ((cDay ?? 0) >= LIMITS.perDay) return { allowed: false, reason: "per_day", retryAfterSec: 24 * 60 * 60 };
+  if (cMin >= LIMITS.perMinute) return { allowed: false, reason: "per_minute", retryAfterSec: 60 };
+  if (cHour >= LIMITS.perHour) return { allowed: false, reason: "per_hour", retryAfterSec: 60 * 60 };
+  if (cDay >= LIMITS.perDay) return { allowed: false, reason: "per_day", retryAfterSec: 24 * 60 * 60 };
   return { allowed: true };
 }
 

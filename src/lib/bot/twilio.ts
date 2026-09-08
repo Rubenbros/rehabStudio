@@ -1,6 +1,6 @@
 import twilio from "twilio";
 import { env } from "./env";
-import { supabaseAdmin } from "./supabase";
+import { insertMessage } from "./repo/messageLog";
 
 let cached: ReturnType<typeof twilio> | null = null;
 
@@ -17,13 +17,11 @@ export async function sendWhatsApp(phone: string, body: string, meta: Record<str
   const to = toWhatsApp(phone);
   const from = env.twilioFrom();
   const msg = await client().messages.create({ from, to, body });
-  await supabaseAdmin()
-    .from("message_log")
-    .insert({
-      phone: phone.replace(/^whatsapp:/, ""),
-      direction: "outbound",
-      body,
-      meta: { sid: msg.sid, ...meta },
-    });
+  await insertMessage({
+    phone: phone.replace(/^whatsapp:/, ""),
+    direction: "outbound",
+    body,
+    meta: { sid: msg.sid, ...meta },
+  });
   return msg.sid;
 }

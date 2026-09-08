@@ -1,6 +1,21 @@
 import { z } from "zod";
 import { addDays } from "date-fns";
-import { supabaseAdmin } from "./supabase";
+import {
+  insertAppointment,
+  getAppointmentById,
+  listAppointments as listAppointmentRows,
+  listPendingApprovals as listPendingApprovalRows,
+  listAppointmentStats,
+  updateAppointment,
+} from "./repo/appointments";
+import { getPatientByPhone, upsertPatientByPhone } from "./repo/patients";
+import {
+  insertPendingQuestion,
+  getPendingQuestionById,
+  updatePendingQuestion,
+  listOpenQuestions as listOpenQuestionRows,
+} from "./repo/pendingQuestions";
+import type { AppointmentRow, PendingQuestionRow } from "./repo/types";
 import {
   createCalendarEvent,
   deleteCalendarEvent,
@@ -112,8 +127,7 @@ const bookAppointment: Tool<
     const phone = input.patient_phone ?? ctx.callerPhone;
     if (!phone) throw new Error("patient_phone is required when no caller phone is in context");
 
-    const sb = supabaseAdmin();
-    const { data: patient } = await sb.from("patients").select("*").eq("phone", phone).maybeSingle();
+    const patient = await getPatientByPhone(phone);
 
     const name = input.patient_name ?? patient?.full_name ?? "Paciente";
     const email = input.patient_email ?? patient?.email ?? undefined;
@@ -126,23 +140,18 @@ const bookAppointment: Tool<
     if (!mode) throw new Error("Requested time is outside any working window");
 
     if (mode === "extended" && !ctx.isOwner) {
-      const { data: appt, error } = await sb
-        .from("appointments")
-        .insert({
-          patient_id: patient?.id ?? null,
-          patient_phone: phone,
-          patient_name: name,
-          starts_at: startsAt.toISOString(),
-          ends_at: endsAt.toISOString(),
-          duration_min: input.duration_min,
-          price_eur: price,
-          kind: input.duration_min === 30 ? "followup" : "session",
-          status: "pending_approval",
-          notes: input.notes,
-        })
-        .select()
-        .single();
-      if (error) throw error;
+      const appt = await insertAppointment({
+        patient_id: patient?.id ?? null,
+        patient_phone: phone,
+        patient_name: name,
+        starts_at: startsAt.toISOString(),
+        ends_at: endsAt.toISOString(),
+        duration_min: input.duration_min,
+        price_eur: price,
+        kind: input.duration_min === 30 ? "followup" : "session",
+        status: "pending_approval",
+        notes: input.notes,
+      });
 
       await notifyOwnerOfPending({
         appointmentId: appt.id,
@@ -164,25 +173,20 @@ const bookAppointment: Tool<
       notes: input.notes,
     });
 
-    const { data: appt, error } = await sb
-      .from("appointments")
-      .insert({
-        patient_id: patient?.id ?? null,
-        patient_phone: phone,
-        patient_name: name,
-        google_event_id: event.id,
-        starts_at: startsAt.toISOString(),
-        ends_at: endsAt.toISOString(),
-        duration_min: input.duration_min,
-        price_eur: price,
-        kind: input.duration_min === 30 ? "followup" : "session",
-        status: "confirmed",
-        notes: input.notes,
-        confirmation_sent_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-    if (error) throw error;
+    const appt = await insertAppointment({
+      patient_id: patient?.id ?? null,
+      patient_phone: phone,
+      patient_name: name,
+      google_event_id: event.id,
+      starts_at: startsAt.toISOString(),
+      ends_at: endsAt.toISOString(),
+      duration_min: input.duration_min,
+      price_eur: price,
+      kind: input.duration_min === 30 ? "followup" : "session",
+      status: "confirmed",
+      notes: input.notes,
+      confirmation_sent_at: new Date().toISOString(),
+    });
 
     return {
       status: "confirmed",
@@ -241,38 +245,19 @@ const listAppointments: Tool<
     include_pending: z.boolean().optional(),
   }),
   async run({ phone, from, to, include_pending }, ctx) {
-    const sb = supabaseAdmin();
     const fromD = from ? new Date(from) : new Date();
     const toD = to ? new Date(to) : addDays(fromD, 30);
-    let q = sb
-      .from("appointments")
-      .select("*")
-      .gte("starts_at", fromD.toISOString())
-      .lte("starts_at", toD.toISOString())
-      .neq("status", "cancelled")
-      .order("starts_at");
-    if (!include_pending) q = q.neq("status", "pending_approval");
-    if (!ctx.isOwner && ctx.callerPhone) q = q.eq("patient_phone", ctx.callerPhone);
-    else if (phone) q = q.eq("patient_phone", phone);
-    const { data, error } = await q;
-    if (error) throw error;
-    return { appointments: (data ?? []) as AppointmentRow[] };
+    // El paciente solo ve lo suyo; el owner puede filtrar por teléfono.
+    const patientPhone = !ctx.isOwner && ctx.callerPhone ? ctx.callerPhone : phone;
+    const appointments = await listAppointmentRows({
+      from: fromD.toISOString(),
+      to: toD.toISOString(),
+      includePending: include_pending,
+      patientPhone,
+    });
+    return { appointments };
   },
 };
-
-interface AppointmentRow {
-  id: string;
-  patient_phone: string;
-  patient_name: string;
-  starts_at: string;
-  ends_at: string;
-  duration_min: number;
-  price_eur: number;
-  status: string;
-  google_event_id: string;
-  kind: string;
-  notes?: string | null;
-}
 
 const cancelAppointment: Tool<{ appointment_id: string }, { ok: true }> = {
   name: "cancel_appointment",
@@ -281,15 +266,16 @@ const cancelAppointment: Tool<{ appointment_id: string }, { ok: true }> = {
   schema: { type: "object", properties: { appointment_id: { type: "string" } }, required: ["appointment_id"] },
   args: z.object({ appointment_id: z.string() }),
   async run({ appointment_id }, ctx) {
-    const sb = supabaseAdmin();
-    const { data: appt, error } = await sb.from("appointments").select("*").eq("id", appointment_id).maybeSingle();
-    if (error) throw error;
+    const appt = await getAppointmentById(appointment_id);
     if (!appt) throw new Error("Appointment not found");
     if (!ctx.isOwner && ctx.callerPhone && appt.patient_phone !== ctx.callerPhone) {
       throw new Error("Cannot cancel another patient's appointment");
     }
     if (appt.google_event_id) await deleteCalendarEvent(appt.google_event_id);
-    await sb.from("appointments").update({ status: "cancelled", updated_at: new Date().toISOString() }).eq("id", appointment_id);
+    await updateAppointment(appointment_id, {
+      status: "cancelled",
+      updated_at: new Date().toISOString(),
+    });
     return { ok: true };
   },
 };
@@ -316,8 +302,7 @@ const rescheduleAppointment: Tool<
     duration_min: z.union([z.literal(30), z.literal(60)]).optional(),
   }),
   async run({ appointment_id, new_starts_at, duration_min }, ctx) {
-    const sb = supabaseAdmin();
-    const { data: appt } = await sb.from("appointments").select("*").eq("id", appointment_id).maybeSingle();
+    const appt = await getAppointmentById(appointment_id);
     if (!appt) throw new Error("Appointment not found");
     if (!ctx.isOwner && ctx.callerPhone && appt.patient_phone !== ctx.callerPhone) {
       throw new Error("Cannot reschedule another patient's appointment");
@@ -328,17 +313,14 @@ const rescheduleAppointment: Tool<
       await updateCalendarEvent(appt.google_event_id, { startsAt, durationMin: dur });
     }
     const endsAt = new Date(startsAt.getTime() + dur * 60_000);
-    await sb
-      .from("appointments")
-      .update({
-        starts_at: startsAt.toISOString(),
-        ends_at: endsAt.toISOString(),
-        duration_min: dur,
-        reminder_24h_sent_at: null,
-        reminder_2h_sent_at: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", appointment_id);
+    await updateAppointment(appointment_id, {
+      starts_at: startsAt.toISOString(),
+      ends_at: endsAt.toISOString(),
+      duration_min: dur,
+      reminder_24h_sent_at: null,
+      reminder_2h_sent_at: null,
+      updated_at: new Date().toISOString(),
+    });
     return { ok: true, when: formatWhen(startsAt) };
   },
 };
@@ -367,20 +349,14 @@ const updatePatient: Tool<
   }),
   async run(input, ctx) {
     if (!ctx.callerPhone) throw new Error("update_patient requires caller phone");
-    const sb = supabaseAdmin();
-    await sb
-      .from("patients")
-      .upsert(
-        {
-          phone: ctx.callerPhone,
-          full_name: input.full_name,
-          email: input.email,
-          reason: input.reason,
-          language: input.language ?? "es",
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "phone" },
-      );
+    await upsertPatientByPhone({
+      phone: ctx.callerPhone,
+      full_name: input.full_name,
+      email: input.email,
+      reason: input.reason,
+      language: input.language ?? "es",
+      updated_at: new Date().toISOString(),
+    });
     return { ok: true };
   },
 };
@@ -392,13 +368,7 @@ const listPendingApprovals: Tool<Record<string, never>, { pending: AppointmentRo
   schema: { type: "object", properties: {} },
   args: z.object({}) as unknown as z.ZodType<Record<string, never>>,
   async run() {
-    const sb = supabaseAdmin();
-    const { data } = await sb
-      .from("appointments")
-      .select("*")
-      .eq("status", "pending_approval")
-      .order("created_at", { ascending: true });
-    return { pending: (data ?? []) as AppointmentRow[] };
+    return { pending: await listPendingApprovalRows() };
   },
 };
 
@@ -413,19 +383,14 @@ const approveAppointment: Tool<
   schema: { type: "object", properties: { appointment_id: { type: "string" } }, required: ["appointment_id"] },
   args: z.object({ appointment_id: z.string() }),
   async run({ appointment_id }) {
-    const sb = supabaseAdmin();
-    const { data: appt } = await sb.from("appointments").select("*").eq("id", appointment_id).maybeSingle();
+    const appt = await getAppointmentById(appointment_id);
     if (!appt) throw new Error("Appointment not found");
     if (appt.status !== "pending_approval") {
       throw new Error(`Appointment status is ${appt.status}, cannot approve`);
     }
 
     const startsAt = new Date(appt.starts_at);
-    const { data: patient } = await sb
-      .from("patients")
-      .select("email,language")
-      .eq("phone", appt.patient_phone)
-      .maybeSingle();
+    const patient = await getPatientByPhone(appt.patient_phone);
 
     const event = await createCalendarEvent({
       patientName: appt.patient_name ?? "Paciente",
@@ -436,15 +401,12 @@ const approveAppointment: Tool<
       notes: appt.notes ?? undefined,
     });
 
-    await sb
-      .from("appointments")
-      .update({
-        status: "confirmed",
-        google_event_id: event.id,
-        confirmation_sent_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", appointment_id);
+    await updateAppointment(appointment_id, {
+      status: "confirmed",
+      google_event_id: event.id,
+      confirmation_sent_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
 
     const lang = (patient?.language ?? "es") as "es" | "en";
     const when = formatWhen(startsAt, lang);
@@ -476,19 +438,20 @@ const rejectAppointment: Tool<{ appointment_id: string; reason?: string }, { ok:
   },
   args: z.object({ appointment_id: z.string(), reason: z.string().optional() }),
   async run({ appointment_id, reason }) {
-    const sb = supabaseAdmin();
-    const { data: appt } = await sb.from("appointments").select("*").eq("id", appointment_id).maybeSingle();
+    const appt = await getAppointmentById(appointment_id);
     if (!appt) throw new Error("Appointment not found");
     if (appt.status !== "pending_approval") {
       throw new Error(`Appointment status is ${appt.status}, cannot reject`);
     }
 
-    await sb
-      .from("appointments")
-      .update({ status: "cancelled", notes: reason, updated_at: new Date().toISOString() })
-      .eq("id", appointment_id);
+    // `notes` solo se escribe si viene motivo: sin el, la nota previa se conserva.
+    await updateAppointment(appointment_id, {
+      status: "cancelled",
+      notes: reason,
+      updated_at: new Date().toISOString(),
+    });
 
-    const { data: patient } = await sb.from("patients").select("language").eq("phone", appt.patient_phone).maybeSingle();
+    const patient = await getPatientByPhone(appt.patient_phone);
     const lang = (patient?.language ?? "es") as "es" | "en";
     const when = formatWhen(new Date(appt.starts_at), lang);
     const msg =
@@ -578,16 +541,13 @@ const getStats: Tool<
   schema: { type: "object", properties: { from: { type: "string" }, to: { type: "string" } } },
   args: z.object({ from: z.string().optional(), to: z.string().optional() }),
   async run({ from, to }) {
-    const sb = supabaseAdmin();
     const now = new Date();
     const fromD = from ? new Date(from) : new Date(now.getFullYear(), now.getMonth(), 1);
     const toD = to ? new Date(to) : addDays(fromD, 35);
-    const { data } = await sb
-      .from("appointments")
-      .select("duration_min,price_eur,status,kind")
-      .gte("starts_at", fromD.toISOString())
-      .lte("starts_at", toD.toISOString());
-    const rows = data ?? [];
+    const rows = await listAppointmentStats({
+      from: fromD.toISOString(),
+      to: toD.toISOString(),
+    });
     const confirmed = rows.filter((r) => r.status === "confirmed");
     return {
       total: confirmed.length,
@@ -619,15 +579,6 @@ const listCalendarEvents: Tool<{ from: string; to: string }, { events: unknown[]
 // Q&A relay (patient → owner → patient)
 // ------------------------------------------------------------------
 
-interface PendingQuestionRow {
-  id: string;
-  patient_phone: string;
-  patient_name: string | null;
-  question: string;
-  status: string;
-  asked_at: string;
-}
-
 const askOwnerQuestion: Tool<{ question: string }, { ok: true; question_id: string }> = {
   name: "ask_owner_question",
   description:
@@ -646,25 +597,15 @@ const askOwnerQuestion: Tool<{ question: string }, { ok: true; question_id: stri
   args: z.object({ question: z.string().min(3).max(800) }),
   async run({ question }, ctx) {
     if (!ctx.callerPhone) throw new Error("ask_owner_question requires caller phone");
-    const sb = supabaseAdmin();
-    const { data: patient } = await sb
-      .from("patients")
-      .select("full_name")
-      .eq("phone", ctx.callerPhone)
-      .maybeSingle();
+    const patient = await getPatientByPhone(ctx.callerPhone);
     const name = patient?.full_name ?? "Paciente";
 
-    const { data: row, error } = await sb
-      .from("pending_questions")
-      .insert({
-        patient_phone: ctx.callerPhone,
-        patient_name: name,
-        question,
-        notified_owner_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-    if (error) throw error;
+    const row = await insertPendingQuestion({
+      patient_phone: ctx.callerPhone,
+      patient_name: name,
+      question,
+      notified_owner_at: new Date().toISOString(),
+    });
 
     const ownerMsg =
       `❓ Pregunta de ${name} (${ctx.callerPhone}):\n` +
@@ -700,29 +641,17 @@ const answerQuestion: Tool<
   },
   args: z.object({ question_id: z.string(), answer: z.string().min(1).max(1500) }),
   async run({ question_id, answer }) {
-    const sb = supabaseAdmin();
-    const { data: q } = await sb
-      .from("pending_questions")
-      .select("*")
-      .eq("id", question_id)
-      .maybeSingle();
+    const q = await getPendingQuestionById(question_id);
     if (!q) throw new Error("Pending question not found");
     if (q.status !== "pending") throw new Error(`Question status is ${q.status}`);
 
-    await sb
-      .from("pending_questions")
-      .update({
-        status: "answered",
-        answer,
-        answered_at: new Date().toISOString(),
-      })
-      .eq("id", question_id);
+    await updatePendingQuestion(question_id, {
+      status: "answered",
+      answer,
+      answered_at: new Date().toISOString(),
+    });
 
-    const { data: patient } = await sb
-      .from("patients")
-      .select("language")
-      .eq("phone", q.patient_phone)
-      .maybeSingle();
+    const patient = await getPatientByPhone(q.patient_phone);
     const lang = (patient?.language ?? "es") as "es" | "en";
     const msg =
       lang === "en"
@@ -744,13 +673,7 @@ const listOpenQuestions: Tool<Record<string, never>, { questions: PendingQuestio
   schema: { type: "object", properties: {} },
   args: z.object({}) as unknown as z.ZodType<Record<string, never>>,
   async run() {
-    const sb = supabaseAdmin();
-    const { data } = await sb
-      .from("pending_questions")
-      .select("*")
-      .eq("status", "pending")
-      .order("asked_at", { ascending: true });
-    return { questions: (data ?? []) as PendingQuestionRow[] };
+    return { questions: await listOpenQuestionRows() };
   },
 };
 

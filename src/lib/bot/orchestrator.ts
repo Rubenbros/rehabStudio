@@ -1,8 +1,16 @@
 import { chat, ChatMessage, ToolCall } from "./deepseek";
 import { runTool, toDeepSeekTools, toolsFor } from "./tools";
-import { supabaseAdmin } from "./supabase";
 import { env } from "./env";
-import { detectLang, Lang, T } from "./i18n";
+import { detectLang, T } from "./i18n";
+import { getConversationByPhone, upsertConversation } from "./repo/conversations";
+import { insertMessage } from "./repo/messageLog";
+import { getPatientByPhone, insertPatient } from "./repo/patients";
+import {
+  listPendingApprovalSummaries,
+  type PendingApprovalRow,
+} from "./repo/appointments";
+import { listOpenQuestionSummaries } from "./repo/pendingQuestions";
+import type { PatientRow } from "./repo/types";
 import {
   SAFETY_PROMPT,
   SAFE_REFUSAL,
@@ -13,15 +21,6 @@ import {
 
 const MAX_TURNS = 20;
 const MAX_TOOL_LOOPS = 4;
-
-interface Patient {
-  id: string;
-  phone: string;
-  full_name: string | null;
-  email: string | null;
-  language: Lang;
-  is_owner: boolean;
-}
 
 interface Conversation {
   phone: string;
@@ -60,7 +59,7 @@ function patientSystemPrompt(
   followupPrice: number,
   address: string,
   ownerPhone: string,
-  patient: Patient | null,
+  patient: PatientRow | null,
 ): string {
   return `You are ${clinic}'s booking assistant on WhatsApp.
 Rules:
@@ -110,13 +109,8 @@ interface PendingApprovalSummary {
 }
 
 async function loadPendingApprovals(): Promise<PendingApprovalSummary[]> {
-  const sb = supabaseAdmin();
-  const { data } = await sb
-    .from("appointments")
-    .select("id,patient_name,patient_phone,starts_at,duration_min,created_at")
-    .eq("status", "pending_approval")
-    .order("created_at", { ascending: true });
-  return (data ?? []).map((r) => ({
+  const rows: PendingApprovalRow[] = await listPendingApprovalSummaries();
+  return rows.map((r) => ({
     appointment_id: r.id,
     patient_name: r.patient_name ?? "(sin nombre)",
     patient_phone: r.patient_phone,
@@ -135,13 +129,8 @@ interface OpenQuestionSummary {
 }
 
 async function loadOpenQuestions(): Promise<OpenQuestionSummary[]> {
-  const sb = supabaseAdmin();
-  const { data } = await sb
-    .from("pending_questions")
-    .select("id,patient_name,patient_phone,question,asked_at")
-    .eq("status", "pending")
-    .order("asked_at", { ascending: true });
-  return (data ?? []).map((r) => ({
+  const rows = await listOpenQuestionSummaries();
+  return rows.map((r) => ({
     question_id: r.id,
     patient_name: r.patient_name ?? "(sin nombre)",
     patient_phone: r.patient_phone,
@@ -151,49 +140,35 @@ async function loadOpenQuestions(): Promise<OpenQuestionSummary[]> {
 }
 
 export async function loadConversation(phone: string): Promise<Conversation> {
-  const sb = supabaseAdmin();
-  const { data } = await sb.from("conversations").select("*").eq("phone", phone).maybeSingle();
-  if (data) {
+  const row = await getConversationByPhone(phone);
+  if (row) {
     return {
       phone,
-      state: data.state,
-      context: data.context ?? {},
-      messages: (data.messages ?? []) as ChatMessage[],
+      state: row.state,
+      context: row.context ?? {},
+      messages: (row.messages ?? []) as ChatMessage[],
     };
   }
   return { phone, state: "idle", context: {}, messages: [] };
 }
 
 export async function saveConversation(c: Conversation): Promise<void> {
-  const sb = supabaseAdmin();
   const trimmed = c.messages.slice(-MAX_TURNS);
-  await sb
-    .from("conversations")
-    .upsert(
-      {
-        phone: c.phone,
-        state: c.state,
-        context: c.context,
-        messages: trimmed,
-        last_active: new Date().toISOString(),
-      },
-      { onConflict: "phone" },
-    );
+  await upsertConversation({
+    phone: c.phone,
+    state: c.state,
+    context: c.context,
+    messages: trimmed,
+    last_active: new Date().toISOString(),
+  });
 }
 
-async function loadOrCreatePatient(phone: string, firstMessage: string): Promise<Patient> {
-  const sb = supabaseAdmin();
-  const { data: existing } = await sb.from("patients").select("*").eq("phone", phone).maybeSingle();
-  if (existing) return existing as Patient;
+async function loadOrCreatePatient(phone: string, firstMessage: string): Promise<PatientRow> {
+  const existing = await getPatientByPhone(phone);
+  if (existing) return existing;
   const lang = detectLang(firstMessage);
   const isOwner = phone === env.ownerPhone();
-  const { data: created, error } = await sb
-    .from("patients")
-    .insert({ phone, language: lang, is_owner: isOwner })
-    .select()
-    .single();
-  if (error) throw error;
-  return created as Patient;
+  return await insertPatient({ phone, language: lang, is_owner: isOwner });
 }
 
 export interface HandleResult {
@@ -202,9 +177,8 @@ export interface HandleResult {
 }
 
 export async function handleInbound(phone: string, body: string): Promise<HandleResult> {
-  const sb = supabaseAdmin();
   const sanitized = sanitizeUserInput(body);
-  await sb.from("message_log").insert({ phone, direction: "inbound", body: sanitized });
+  await insertMessage({ phone, direction: "inbound", body: sanitized });
 
   const patient = await loadOrCreatePatient(phone, sanitized);
   const isOwner = patient.is_owner || phone === env.ownerPhone();

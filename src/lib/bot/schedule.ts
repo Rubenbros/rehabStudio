@@ -1,6 +1,6 @@
 import { addDays, addMinutes, format, isAfter, isBefore, startOfDay } from "date-fns";
 import { toZonedTime, fromZonedTime } from "date-fns-tz";
-import { supabaseAdmin } from "./supabase";
+import { getConfigValue, upsertConfigValue } from "./repo/config";
 import { getBusyIntervals } from "./calendar";
 import { env } from "./env";
 
@@ -28,25 +28,19 @@ export interface AvailableSlot {
 }
 
 export async function getSchedule(): Promise<ScheduleConfig> {
-  const { data } = await supabaseAdmin()
-    .from("config")
-    .select("value")
-    .eq("key", "schedule")
-    .maybeSingle();
-  if (!data) {
+  const value = await getConfigValue<ScheduleConfig>("schedule");
+  if (!value) {
     return {
       timezone: env.clinicTimezone(),
       slot_minutes: 30,
       days: { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] },
     };
   }
-  return data.value as ScheduleConfig;
+  return value;
 }
 
 export async function setSchedule(next: ScheduleConfig) {
-  await supabaseAdmin()
-    .from("config")
-    .upsert({ key: "schedule", value: next, updated_at: new Date().toISOString() });
+  await upsertConfigValue("schedule", next, new Date().toISOString());
 }
 
 /**
