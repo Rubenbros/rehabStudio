@@ -21,7 +21,7 @@ Patient WhatsApp ─┐                         ┌─► Google Calendar API
                   │
 Owner (Claude)  ──┴──► /api/mcp (HTTP MCP, bearer auth) ──► same tools
 
-GitHub Actions cron ──► /api/cron/reminders  (day-before / D+10 / auto-reject)
+Cloud Scheduler ──► /api/cron/reminders  (day-before / D+10 / auto-reject)
 ```
 
 ## 2. Provision the dependencies
@@ -121,9 +121,9 @@ Artifact Registry and runs `gcloud run deploy` (region `europe-west1`, service
 `rehab-studio`). Plain settings come from GitHub `vars`, secrets from Secret
 Manager.
 
-The reminders cron is `.github/workflows/reminders.yml`: every 30 minutes it
-calls `/api/cron/reminders` with `Authorization: Bearer $CRON_SECRET`, using the
-repository secrets `BOT_BASE_URL` and `CRON_SECRET`.
+The reminders cron is the Cloud Scheduler job `rehab-reminders`: every 30
+minutes it calls `/api/cron/reminders` with `Authorization: Bearer $CRON_SECRET`.
+It is provisioned outside this repository, so there is nothing to deploy for it.
 
 ## 4. Owner privileges
 
@@ -201,9 +201,9 @@ curl -X POST https://YOUR-DOMAIN/api/mcp \
 
 ## 7. Notes & limitations
 
-- The reminders cron runs every 30 minutes from GitHub Actions, not from the
-  platform. If `BOT_BASE_URL` or `CRON_SECRET` is missing it warns and exits 0
-  instead of failing the workflow.
+- The reminders cron runs every 30 minutes from Cloud Scheduler. The route
+  rejects anything whose `Authorization` header is not exactly
+  `Bearer $CRON_SECRET`, so the job and the secret must stay in sync.
 - The webhook answers Twilio immediately and processes the conversation in the
   background with `after()`. The route sets `maxDuration = 60`; Cloud Run is
   configured with `--timeout 120`, so there is room.
