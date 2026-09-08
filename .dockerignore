@@ -43,13 +43,15 @@ Dockerfile
 # Claude Code
 .claude
 
-# Documentación, scripts locales y migraciones (no forman parte de la imagen)
+# Documentación, scripts locales, esquema SQL y tests (no van en la imagen)
 README.md
 CLAUDE.md
 *.md
 docs
 scripts
-supabase
+db
+tests
+vitest.config.mts
 
 # Carpetas residuales con nombres de ruta de Windows
 C:Users*

@@ -3,9 +3,8 @@
 # Imagen para Google Cloud Run (europe-west1). Construir SIEMPRE para linux/amd64:
 #   docker build --platform=linux/amd64 \
 #     --build-arg NEXT_PUBLIC_SITE_URL=https://therehabstudio.es \
-#     --build-arg NEXT_PUBLIC_SUPABASE_URL=... \
-#     --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=... \
 #     -t rehab-studio .
+# La conexión a Cloud SQL es perezosa: el build NO necesita DATABASE_URL.
 # Cloud Build / GitHub Actions (ubuntu) ya construyen en amd64 por defecto.
 
 ############################
@@ -14,7 +13,7 @@
 FROM node:22-slim AS deps
 WORKDIR /app
 
-# ca-certificates/openssl: TLS hacia Supabase, Twilio, Google APIs y DeepSeek.
+# ca-certificates/openssl: TLS hacia Twilio, Google APIs y DeepSeek.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates openssl \
  && rm -rf /var/lib/apt/lists/*
@@ -34,12 +33,8 @@ COPY . .
 
 # --- NEXT_PUBLIC_* se INLINEAN en build time: deben existir como ENV antes de `next build` ---
 ARG NEXT_PUBLIC_SITE_URL
-ARG NEXT_PUBLIC_SUPABASE_URL
-ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL \
-    NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
-    NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
+ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
 
 # `next build` con output: "standalone" (next.config.ts)
 RUN npm run build
