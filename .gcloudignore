@@ -1,0 +1,43 @@
+# Qué NO se sube al bucket de staging con `gcloud builds submit`.
+# gcloud NO respeta .dockerignore: sin este fichero se subirían node_modules,
+# .next, .git y —lo grave— cualquier .env local con DATABASE_URL,
+# TWILIO_AUTH_TOKEN o GOOGLE_REFRESH_TOKEN.
+#
+# OJO: esto es un subconjunto de .dockerignore a propósito. NO excluir el
+# Dockerfile (lo necesita cloudbuild.yaml) ni tests/, db/, scripts/ ni
+# vitest.config.mts (los necesita cloudbuild-ci.yaml).
+
+# Secretos locales
+.env
+.env.*
+
+# Dependencias y salidas de build (se reconstruyen dentro del build)
+node_modules
+.next
+out
+build
+dist
+coverage
+*.tsbuildinfo
+
+# Control de versiones y CI
+.git
+.gitignore
+.github
+
+# IDE / editores / sistema operativo
+.idea
+.vscode
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+nul
+
+# Herramientas locales
+.claude
+.vercel
+.deploy-trigger
+
+# Carpetas residuales con nombres de ruta de Windows
+C:Users*

@@ -1,0 +1,6 @@
+# Los YAML de CI/CD llevan scripts de shell embebidos: con CRLF, bash falla en
+# Cloud Build con errores ininteligibles ("$: command not found"). Se fija LF
+# de forma explicita para no depender de core.autocrlf de cada maquina.
+cloudbuild*.yaml text eol=lf
+.github/workflows/*.yml text eol=lf
+Dockerfile text eol=lf

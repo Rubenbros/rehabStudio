@@ -103,16 +103,16 @@ POST https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${GOOGLE_C
 
 1. Enable **`aiplatform.googleapis.com`** in the project (`rehab-studio-web`).
 2. Grant **`roles/aiplatform.user`** to the Cloud Run runtime service account
-   (`vars.GCP_RUNTIME_SA`). In Cloud Run ADC resolves through the metadata
-   server, so no key file exists anywhere.
+   (`_RUNTIME_SA` in `cloudbuild.yaml`). In Cloud Run ADC resolves through the
+   metadata server, so no key file exists anywhere.
 3. Locally: `gcloud auth application-default login` and make sure the ADC quota
    project is `rehab-studio-web`
    (`gcloud auth application-default set-quota-project rehab-studio-web`).
-4. Env vars (all plain GitHub `vars`, none secret):
+4. Env vars (all non-secret; they live as `substitutions:` in `cloudbuild.yaml`):
 
    | Variable               | Default (if unset)         | Notes                                            |
    | ---------------------- | -------------------------- | ------------------------------------------------ |
-   | `GOOGLE_CLOUD_PROJECT` | resolved via ADC           | Cloud Run does **not** inject it; the deploy passes `vars.GCP_PROJECT_ID` |
+   | `GOOGLE_CLOUD_PROJECT` | resolved via ADC           | Cloud Run does **not** inject it; the deploy passes `_PROJECT_ID` |
    | `VERTEX_LOCATION`      | `europe-west1`             | Same region as Cloud Run → data stays in the EU. Use `global` only if a model is unavailable regionally (the host then drops the region prefix) |
    | `GEMINI_MODEL`         | `google/gemini-2.5-flash`  | Model ids on this endpoint are prefixed with `google/` |
 

@@ -1,5 +1,25 @@
 name: Deploy to Cloud Run
 
+# ############################################################################
+# EN RETIRADA — lo sustituye `cloudbuild.yaml` (Google Cloud Build).
+#
+# Sigue ACTIVO a propósito: los disparadores de Cloud Build todavía no existen,
+# así que si este workflow se desactivara al fusionar quedaría una ventana SIN
+# DESPLIEGUE. El apagado es una variable de repositorio, no un borrado:
+#
+#   - Mientras `vars.DEPLOY_VIA_CLOUD_BUILD` NO valga 'true', despliega ESTE
+#     workflow (comportamiento de siempre).
+#   - Cuando el PRIMER build de Cloud Build pase en verde, el orquestador pone
+#     la variable a 'true' (Settings → Secrets and variables → Actions →
+#     Variables) y este workflow deja de ejecutarse en el acto, sin tocar código
+#     y sin necesidad de coordinar el orden de las fusiones.
+#   - A partir de ahí este fichero SE PUEDE BORRAR (y con él las `vars` de
+#     GitHub y el Workload Identity Federation, si no lo usa nadie más).
+#
+# Así nunca hay ventana sin despliegue ni dos despliegues simultáneos.
+# Decisión y alternativas: docs/adr/0001-cloud-build-sustituye-github-actions.md
+# ############################################################################
+#
 # Despliegue de producción a Google Cloud Run (europe-west1).
 # Este workflow solo construye la imagen y la despliega. Requiere que el runbook
 # de primer despliegue manual haya creado: repo de Artifact Registry, Service
@@ -36,6 +56,10 @@ env:
 
 jobs:
   deploy:
+    # Interruptor de apagado: en cuanto la variable de repositorio
+    # DEPLOY_VIA_CLOUD_BUILD valga 'true', despliega Cloud Build y este job se
+    # salta. Ver el bloque "EN RETIRADA" al principio del fichero.
+    if: vars.DEPLOY_VIA_CLOUD_BUILD != 'true'
     runs-on: ubuntu-latest
     # Entorno de GitHub 'production' (permite añadir reglas de aprobación luego).
     environment: production
