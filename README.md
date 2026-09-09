@@ -76,15 +76,36 @@ npx shadcn@latest add card
 npx shadcn@latest add dialog
 ```
 
+## WhatsApp booking bot
+
+Besides the public site, this repo hosts the WhatsApp booking bot
+(`src/lib/bot`, `/api/twilio/webhook`, `/api/mcp`, `/api/cron/reminders`). The
+conversation runs on **Gemini via Vertex AI**, reached through its
+OpenAI-compatible endpoint and authenticated with **Application Default
+Credentials — there is no LLM API key**:
+
+| Variable               | Secret? | Default                   | Purpose                                                   |
+| ---------------------- | ------- | ------------------------- | --------------------------------------------------------- |
+| `GOOGLE_CLOUD_PROJECT` | no      | resolved via ADC          | Project billed for Vertex AI (deploy passes `GCP_PROJECT_ID`) |
+| `VERTEX_LOCATION`      | no      | `europe-west1`            | Vertex region; `global` drops the region prefix from the host |
+| `GEMINI_MODEL`         | no      | `google/gemini-2.5-flash` | Model id on the OpenAI-compatible endpoint                |
+
+On Cloud Run the credentials come from the runtime service account (it needs
+`roles/aiplatform.user`); locally from `gcloud auth application-default login`.
+
+Full setup — Cloud SQL, Google Calendar OAuth, Twilio, Vertex AI, MCP — lives in
+[`docs/whatsapp-bot.md`](docs/whatsapp-bot.md).
+
 ## Deployment
 
-### Vercel (Recommended)
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new)
-
-### Manual Deployment
+Production runs on **Google Cloud Run** (`europe-west1`, service
+`rehab-studio`). Pushing to `master` triggers
+`.github/workflows/deploy-cloudrun.yml`, which builds the standalone image,
+pushes it to Artifact Registry and deploys. Plain settings come from GitHub
+`vars`; secrets come from Secret Manager.
 
 ```bash
+# Local production build
 npm run build
 npm run start
 ```
