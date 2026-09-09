@@ -1,5 +1,5 @@
-import { chat, ChatMessage, ToolCall } from "./deepseek";
-import { runTool, toDeepSeekTools, toolsFor } from "./tools";
+import { chat, ChatMessage, ToolCall } from "./llm";
+import { runTool, toToolSpecs, toolsFor } from "./tools";
 import { env } from "./env";
 import { detectLang, T } from "./i18n";
 import { getConversationByPhone, upsertConversation } from "./repo/conversations";
@@ -234,7 +234,7 @@ export async function handleInbound(phone: string, body: string): Promise<Handle
   }
 
   const tools = toolsFor(isOwner ? "owner" : "patient");
-  const toolSpecs = toDeepSeekTools(tools);
+  const toolSpecs = toToolSpecs(tools);
 
   const messages: ChatMessage[] = [system, timeHint, ...extraSystem, ...conv.messages];
   let finalText: string | null = null;
