@@ -136,13 +136,6 @@ gcloud auth application-default login   # ADC for Vertex AI (no LLM API key)
 npm run dev                  # then expose with `ngrok http 3000` for Twilio webhook
 ```
 
-> **Pending manual edit:** `.env.example` still carries the retired
-> `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` / `DEEPSEEK_BASE_URL` block. Replace it
-> with the optional `GOOGLE_CLOUD_PROJECT` / `VERTEX_LOCATION` / `GEMINI_MODEL`
-> vars from §2.4 (all three have working defaults, so local dev runs without
-> them). The agent that migrated this code is not allowed to touch `.env*`
-> files.
-
 ```bash
 # Checks before pushing
 npm run lint
