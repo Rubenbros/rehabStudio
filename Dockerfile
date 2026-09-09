@@ -13,7 +13,7 @@
 FROM node:22-slim AS deps
 WORKDIR /app
 
-# ca-certificates/openssl: TLS hacia Twilio, Google APIs y DeepSeek.
+# ca-certificates/openssl: TLS hacia Twilio y las APIs de Google (Calendar, Vertex AI).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates openssl \
  && rm -rf /var/lib/apt/lists/*

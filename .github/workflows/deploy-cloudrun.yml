@@ -6,7 +6,8 @@ name: Deploy to Cloud Run
 # Accounts (deploy y runtime), Workload Identity Federation y los secretos en
 # Secret Manager (nombre del secreto = nombre de la variable en MAYÚSCULAS).
 # La SA de runtime necesita además roles/cloudsql.client en el proyecto de la
-# instancia de Cloud SQL.
+# instancia de Cloud SQL y roles/aiplatform.user para llamar a Vertex AI
+# (Gemini) por ADC — el bot no usa API keys de LLM.
 
 on:
   push:
@@ -89,8 +90,8 @@ jobs:
             --timeout 120 \
             --cpu-boost \
             --add-cloudsql-instances "${CLOUDSQL_INSTANCE}" \
-            --set-env-vars "NODE_ENV=production,NEXT_PUBLIC_SITE_URL=${{ vars.NEXT_PUBLIC_SITE_URL }},TWILIO_ACCOUNT_SID=${{ vars.TWILIO_ACCOUNT_SID }},TWILIO_WHATSAPP_FROM=${{ vars.TWILIO_WHATSAPP_FROM }},DEEPSEEK_MODEL=${{ vars.DEEPSEEK_MODEL }},DEEPSEEK_BASE_URL=${{ vars.DEEPSEEK_BASE_URL }},GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }},GOOGLE_REDIRECT_URI=${{ vars.GOOGLE_REDIRECT_URI }},GOOGLE_CALENDAR_ID=${{ vars.GOOGLE_CALENDAR_ID }},OWNER_PHONE=${{ vars.OWNER_PHONE }},OWNER_EMAIL=${{ vars.OWNER_EMAIL }},CLINIC_NAME=${{ vars.CLINIC_NAME }},CLINIC_TIMEZONE=${{ vars.CLINIC_TIMEZONE }},CLINIC_ADDRESS=${{ vars.CLINIC_ADDRESS }},SESSION_PRICE_EUR=${{ vars.SESSION_PRICE_EUR }},FOLLOWUP_PRICE_EUR=${{ vars.FOLLOWUP_PRICE_EUR }}" \
-            --set-secrets "DATABASE_URL=DATABASE_URL:latest,TWILIO_AUTH_TOKEN=TWILIO_AUTH_TOKEN:latest,DEEPSEEK_API_KEY=DEEPSEEK_API_KEY:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REFRESH_TOKEN=GOOGLE_REFRESH_TOKEN:latest,CRON_SECRET=CRON_SECRET:latest,MCP_BEARER_TOKEN=MCP_BEARER_TOKEN:latest"
+            --set-env-vars "NODE_ENV=production,NEXT_PUBLIC_SITE_URL=${{ vars.NEXT_PUBLIC_SITE_URL }},TWILIO_ACCOUNT_SID=${{ vars.TWILIO_ACCOUNT_SID }},TWILIO_WHATSAPP_FROM=${{ vars.TWILIO_WHATSAPP_FROM }},GOOGLE_CLOUD_PROJECT=${{ vars.GCP_PROJECT_ID }},VERTEX_LOCATION=${{ vars.VERTEX_LOCATION }},GEMINI_MODEL=${{ vars.GEMINI_MODEL }},GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }},GOOGLE_REDIRECT_URI=${{ vars.GOOGLE_REDIRECT_URI }},GOOGLE_CALENDAR_ID=${{ vars.GOOGLE_CALENDAR_ID }},OWNER_PHONE=${{ vars.OWNER_PHONE }},OWNER_EMAIL=${{ vars.OWNER_EMAIL }},CLINIC_NAME=${{ vars.CLINIC_NAME }},CLINIC_TIMEZONE=${{ vars.CLINIC_TIMEZONE }},CLINIC_ADDRESS=${{ vars.CLINIC_ADDRESS }},SESSION_PRICE_EUR=${{ vars.SESSION_PRICE_EUR }},FOLLOWUP_PRICE_EUR=${{ vars.FOLLOWUP_PRICE_EUR }}" \
+            --set-secrets "DATABASE_URL=DATABASE_URL:latest,TWILIO_AUTH_TOKEN=TWILIO_AUTH_TOKEN:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REFRESH_TOKEN=GOOGLE_REFRESH_TOKEN:latest,CRON_SECRET=CRON_SECRET:latest,MCP_BEARER_TOKEN=MCP_BEARER_TOKEN:latest"
 
       - name: URL del servicio
         run: |
