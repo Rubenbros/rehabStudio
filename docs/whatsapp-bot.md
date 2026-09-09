@@ -3,7 +3,7 @@
 End-to-end automation for rehabStudio:
 
 - Patients book / reschedule / cancel via WhatsApp.
-- DeepSeek powers the conversation; Google Calendar is the source of truth.
+- Gemini on Vertex AI powers the conversation; Google Calendar is the source of truth.
 - Twilio sends/receives WhatsApp messages.
 - Cloud SQL (PostgreSQL) stores patients, conversation state and an appointment mirror.
 - Owner controls the agenda from WhatsApp (privileged commands) **or** from
@@ -15,7 +15,7 @@ End-to-end automation for rehabStudio:
 Patient WhatsApp ─┐                         ┌─► Google Calendar API
                   │  Twilio webhook         │
                   ▼                         │
-        /api/twilio/webhook ──► DeepSeek (tool calling) ──► Cloud SQL
+        /api/twilio/webhook ──► Vertex AI / Gemini (tool calling) ──► Cloud SQL
                   ▲                         │
                   │  Twilio REST            └─► Twilio (outbound)
                   │
@@ -92,11 +92,39 @@ The database lives in the shared Cloud SQL instance
 > conversation window after the user's last message. Outside that window you
 > **must** use approved templates — the reminders route is the typical culprit.
 
-### 2.4 DeepSeek
+### 2.4 Vertex AI (Gemini)
 
-1. Sign up at <https://platform.deepseek.com>.
-2. Create an API key → `DEEPSEEK_API_KEY`.
-3. Default `DEEPSEEK_MODEL=deepseek-chat` is fine (cheap and tool-call capable).
+The bot has **no LLM API key**. It authenticates with Application Default
+Credentials (ADC) against Vertex AI's OpenAI-compatible endpoint:
+
+```
+POST https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${GOOGLE_CLOUD_PROJECT}/locations/${VERTEX_LOCATION}/endpoints/openapi/chat/completions
+```
+
+1. Enable **`aiplatform.googleapis.com`** in the project (`rehab-studio-web`).
+2. Grant **`roles/aiplatform.user`** to the Cloud Run runtime service account
+   (`vars.GCP_RUNTIME_SA`). In Cloud Run ADC resolves through the metadata
+   server, so no key file exists anywhere.
+3. Locally: `gcloud auth application-default login` and make sure the ADC quota
+   project is `rehab-studio-web`
+   (`gcloud auth application-default set-quota-project rehab-studio-web`).
+4. Env vars (all plain GitHub `vars`, none secret):
+
+   | Variable               | Default (if unset)         | Notes                                            |
+   | ---------------------- | -------------------------- | ------------------------------------------------ |
+   | `GOOGLE_CLOUD_PROJECT` | resolved via ADC           | Cloud Run does **not** inject it; the deploy passes `vars.GCP_PROJECT_ID` |
+   | `VERTEX_LOCATION`      | `europe-west1`             | Same region as Cloud Run → data stays in the EU. Use `global` only if a model is unavailable regionally (the host then drops the region prefix) |
+   | `GEMINI_MODEL`         | `google/gemini-2.5-flash`  | Model ids on this endpoint are prefixed with `google/` |
+
+`google/gemini-2.5-flash` was verified live in `europe-west1` (2026-09-09) with
+the real tool schemas: two-turn tool calling, several `system` messages, integer
+`enum`s, `default`s and parameterless objects all work unmodified.
+
+Gemini 2.5 enables "thinking" by default; the adapter turns it off
+(`extra_body.google.thinking_config.thinking_budget = 0`) because it adds
+hundreds of reasoning tokens and latency to short booking turns and forces
+`thought_signature` round-tripping. Raise it in `src/lib/bot/llm.ts` if answer
+quality ever demands it — the adapter already preserves `extra_content`.
 
 ## 3. Deploy
 
@@ -104,6 +132,7 @@ The database lives in the shared Cloud SQL instance
 # Local dev
 npm install
 cp .env.example .env.local   # fill in values
+gcloud auth application-default login   # ADC for Vertex AI (no LLM API key)
 npm run dev                  # then expose with `ngrok http 3000` for Twilio webhook
 ```
 

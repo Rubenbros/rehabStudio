@@ -32,7 +32,7 @@ import {
 } from "./schedule";
 import { sendWhatsApp } from "./twilio";
 import { env } from "./env";
-import type { ToolSpec } from "./deepseek";
+import type { ToolSpec } from "./llm";
 
 export type Audience = "patient" | "owner" | "both";
 
@@ -703,7 +703,7 @@ export function toolsFor(audience: "patient" | "owner") {
   return ALL_TOOLS.filter((t) => t.audience === "both" || t.audience === audience);
 }
 
-export function toDeepSeekTools(tools: Tool<unknown, unknown>[]): ToolSpec[] {
+export function toToolSpecs(tools: Tool<unknown, unknown>[]): ToolSpec[] {
   return tools.map((t) => ({
     type: "function",
     function: { name: t.name, description: t.description, parameters: t.schema },

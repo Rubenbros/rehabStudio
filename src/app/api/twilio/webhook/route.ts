@@ -20,7 +20,7 @@ const MAX_BODY_LEN = 1000;
  * Twilio WhatsApp inbound webhook.
  *
  * Returns TwiML <Response/> immediately so Twilio doesn't time out, and uses
- * `after()` to keep the lambda alive long enough to call DeepSeek and reply
+ * `after()` to keep the lambda alive long enough to call the LLM and reply
  * via the Twilio REST API.
  *
  * Defenses:
