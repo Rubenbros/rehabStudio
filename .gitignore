@@ -23,6 +23,8 @@
 # misc
 .DS_Store
 *.pem
+# Artefacto de Windows: redirigir a NUL desde Git Bash crea este fichero.
+nul
 
 # debug
 npm-debug.log*

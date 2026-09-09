@@ -364,3 +364,76 @@ describe("configuración por entorno", () => {
     expect(body.model).toBe("google/gemini-2.5-flash");
   });
 });
+
+describe("chat — timeout", () => {
+  // El timeout del adaptador (REQUEST_TIMEOUT_MS en src/lib/bot/llm.ts).
+  const TIMEOUT_MS = 12_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Deja avanzar las promesas de ADC hasta que el adaptador llama a fetch. */
+  async function untilFetchCalled() {
+    for (let i = 0; i < 20 && fetchMock.mock.calls.length === 0; i++) {
+      await Promise.resolve();
+    }
+    expect(fetchMock).toHaveBeenCalled();
+  }
+
+  /** fetch que nunca responde: solo rechaza cuando abortan la señal. */
+  function hangingFetch() {
+    fetchMock.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => {
+            const err = new Error("This operation was aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
+        })
+    );
+  }
+
+  it("aborta la llamada si Vertex no responde y lo reporta como timeout", async () => {
+    const chat = await loadChat();
+    hangingFetch();
+
+    const pending = chat([{ role: "user", content: "hola" }]);
+    // Sin esto, un fallo del test dejaría el rechazo sin manejar.
+    const settled = pending.catch((e: Error) => e);
+    await untilFetchCalled();
+
+    const { signal } = fetchMock.mock.calls[0][1] as RequestInit;
+    // Un turno normal (1-5 s) no debe verse afectado.
+    await vi.advanceTimersByTimeAsync(TIMEOUT_MS - 1);
+    expect(signal!.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signal!.aborted).toBe(true);
+    expect((await settled).message).toBe(`Vertex AI timeout after ${TIMEOUT_MS} ms`);
+  });
+
+  it("no aborta —ni deja el temporizador vivo— cuando la respuesta llega a tiempo", async () => {
+    const chat = await loadChat();
+    fetchMock.mockResolvedValue(jsonResponse(okCompletion({ role: "assistant", content: "ok" })));
+
+    const { message } = await chat([{ role: "user", content: "hola" }]);
+
+    expect(message.content).toBe("ok");
+    const { signal } = fetchMock.mock.calls[0][1] as RequestInit;
+    await vi.advanceTimersByTimeAsync(TIMEOUT_MS * 5);
+    expect(signal!.aborted).toBe(false);
+  });
+
+  it("no disfraza de timeout un error de red que no venga del abort", async () => {
+    const chat = await loadChat();
+    fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+
+    await expect(chat([{ role: "user", content: "hola" }])).rejects.toThrow("fetch failed");
+  });
+});

@@ -51,6 +51,19 @@ const THINKING_BUDGET = 0;
 /** Límite del cuerpo de error que propagamos: los errores acaban en logs. */
 const MAX_ERROR_CHARS = 500;
 
+/**
+ * Timeout por llamada a Vertex. Sin él, una petición colgada se come el turno
+ * entero y el paciente se queda sin respuesta.
+ *
+ * Presupuesto: las rutas que acaban llamando al bot declaran `maxDuration = 60`
+ * (segundos) y el orquestador encadena hasta `MAX_TOOL_LOOPS = 4` llamadas al
+ * modelo en un mismo turno. 4 × 12 s = 48 s deja ~12 s para las herramientas
+ * (Cloud SQL, Google Calendar) y para el envío por Twilio dentro de esos 60 s.
+ * Un turno normal de gemini-2.5-flash sin thinking tarda 1-5 s, así que 12 s
+ * solo corta llamadas realmente atascadas.
+ */
+const REQUEST_TIMEOUT_MS = 12_000;
+
 let auth: GoogleAuth | null = null;
 let cachedProjectId: string | null = null;
 
@@ -149,47 +162,66 @@ function normalizeToolCalls(raw: unknown): ToolCall[] | undefined {
  * Autenticación por ADC: en Cloud Run la da la cuenta de servicio del servicio
  * (necesita `roles/aiplatform.user`), en local `gcloud auth application-default
  * login`. No hay ninguna API key.
+ *
+ * Cada llamada está acotada por `REQUEST_TIMEOUT_MS`: el abort cubre también la
+ * lectura del cuerpo, no solo las cabeceras.
  */
 export async function chat(messages: ChatMessage[], tools?: ToolSpec[]): Promise<ChatResponse> {
   const location = env.vertexLocation();
   const [projectId, token] = await Promise.all([resolveProjectId(), accessToken()]);
 
-  const res = await fetch(chatCompletionsUrl(projectId, location), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      model: env.geminiModel(),
-      messages,
-      tools,
-      tool_choice: tools ? "auto" : undefined,
-      temperature: TEMPERATURE,
-      extra_body: { google: { thinking_config: { thinking_budget: THINKING_BUDGET } } },
-    }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Vertex AI error ${res.status}: ${describeError(errText)}`);
+  try {
+    const res = await fetch(chatCompletionsUrl(projectId, location), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        model: env.geminiModel(),
+        messages,
+        tools,
+        tool_choice: tools ? "auto" : undefined,
+        temperature: TEMPERATURE,
+        extra_body: { google: { thinking_config: { thinking_budget: THINKING_BUDGET } } },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Vertex AI error ${res.status}: ${describeError(errText)}`);
+    }
+
+    const data = await res.json();
+    const choice = data.choices?.[0];
+    if (!choice) throw new Error("Vertex AI returned no choices");
+
+    const raw = choice.message ?? {};
+    const message: ChatMessage = {
+      role: "assistant",
+      content: typeof raw.content === "string" ? raw.content : null,
+    };
+    const toolCalls = normalizeToolCalls(raw.tool_calls);
+    if (toolCalls) message.tool_calls = toolCalls;
+    if (raw.extra_content !== undefined) message.extra_content = raw.extra_content;
+
+    return {
+      message,
+      finishReason: choice.finish_reason ?? "stop",
+    };
+  } catch (err) {
+    // `fetch` (undici) rechaza con DOMException "AbortError" al abortar; algún
+    // polyfill usa "TimeoutError". Se traduce a un error legible en los logs.
+    const name = err instanceof Error ? err.name : "";
+    if (controller.signal.aborted && (name === "AbortError" || name === "TimeoutError")) {
+      throw new Error(`Vertex AI timeout after ${REQUEST_TIMEOUT_MS} ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-
-  const data = await res.json();
-  const choice = data.choices?.[0];
-  if (!choice) throw new Error("Vertex AI returned no choices");
-
-  const raw = choice.message ?? {};
-  const message: ChatMessage = {
-    role: "assistant",
-    content: typeof raw.content === "string" ? raw.content : null,
-  };
-  const toolCalls = normalizeToolCalls(raw.tool_calls);
-  if (toolCalls) message.tool_calls = toolCalls;
-  if (raw.extra_content !== undefined) message.extra_content = raw.extra_content;
-
-  return {
-    message,
-    finishReason: choice.finish_reason ?? "stop",
-  };
 }
