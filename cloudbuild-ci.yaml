@@ -5,7 +5,27 @@
 # Actions: hasta ahora los 12 ficheros de test con vitest nunca se ejecutaban en
 # CI y el pipeline era solo "docker build + push + deploy".
 #
-# Este build NO publica imagen ni despliega nada: solo verifica.
+# Este build NO publica imagen, NO despliega y NO lee ningún secreto: solo
+# verifica.
+#
+# ############ SEGURIDAD — LEER ANTES DE TOCAR NADA ############
+# Este repositorio es PÚBLICO y este build EJECUTA CÓDIGO DE PULL REQUESTS,
+# incluidas las de terceros (npm ci corre scripts de instalación arbitrarios,
+# los tests ejecutan lo que traiga la rama). Por eso:
+#
+#   1. Corre con `cloudbuild-ci@`, una cuenta con permisos MÍNIMOS
+#      (roles/logging.logWriter + roles/storage.objectViewer). NO puede
+#      desplegar en Cloud Run, NO puede escribir en Artifact Registry y NO
+#      puede leer Secret Manager. Antes usaba la cuenta de DESPLIEGUE A
+#      PRODUCCIÓN: cualquiera podía abrir una PR y sacar credenciales de
+#      producción.
+#   2. NO se referencia aquí ningún secreto ni `availableSecrets:`. Si algún día
+#      un test necesita credenciales, van a una cuenta/proyecto de PRUEBA, nunca
+#      a los secretos de producción.
+#   3. El DISPARADOR de pull requests debe exigir APROBACIÓN MANUAL para las PR
+#      de personas ajenas al repo ("Require approval before build executes" /
+#      `--require-approval`). Ver README.md → Deployment.
+# ##############################################################
 #
 # NO necesita servicios externos (ni Postgres ni stripe-mock):
 #   - tests/db.integration.test.ts usa `describe.skipIf(!DATABASE_URL_TEST)` y
@@ -16,51 +36,55 @@
 #     salta solo y cuesta tokens de Vertex AI.
 # Resultado esperado hoy: 9 ficheros pasan, 2 se saltan (68 tests en verde).
 #
-# PERMISOS que necesita la SA de build: solo roles/logging.logWriter (y
-# roles/storage.admin si se lanza a mano con `gcloud builds submit`). Se reutiliza
-# cloudbuild-deployer@ por simplicidad, PERO lo correcto es una SA aparte sin
-# run.admin: este build ejecuta código de pull requests y no debería poder
-# desplegar a producción. Ver informe de migración.
+# IMÁGENES: node NO se baja de Docker Hub de forma anónima (límite de descargas
+# por IP → builds que fallan sin motivo aparente). Se usa el espejo de Google
+# `mirror.gcr.io` y además se FIJA POR DIGEST (resuelto el 2026-09-09; es el
+# mismo digest que publica Docker Hub para `node:22-slim`), así el CI es
+# reproducible y no depende de que la etiqueta se mueva. Ver ADR-0001.
 #
-# LANZAR A MANO:
+# LANZAR A MANO (la subida del código la firma tu usuario; la SA de CI solo
+# necesita LEER el objeto de staging, de ahí storage.objectViewer):
 #   gcloud builds submit --config cloudbuild-ci.yaml --region=europe-west1 \
 #     --project=rehab-studio-web
 # ---------------------------------------------------------------------------
 
-serviceAccount: 'projects/rehab-studio-web/serviceAccounts/cloudbuild-deployer@rehab-studio-web.iam.gserviceaccount.com'
+# Con SA propia, options.logging: CLOUD_LOGGING_ONLY es OBLIGATORIO.
+serviceAccount: 'projects/rehab-studio-web/serviceAccounts/cloudbuild-ci@rehab-studio-web.iam.gserviceaccount.com'
 
 substitutions:
   # `next build` inlinea los NEXT_PUBLIC_*: sin este valor el bundle compila
   # igual pero con la URL vacía. Se usa el mismo que en producción para que el
-  # build del CI sea representativo.
+  # build del CI sea representativo. NO es un secreto: es la URL pública del
+  # sitio, ya visible en el bundle JS que sirve la web en abierto.
   _NEXT_PUBLIC_SITE_URL: 'https://therehabstudio.es'
+  _NODE_IMAGE: 'mirror.gcr.io/library/node:22-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5'
 
 steps:
   # Los pasos comparten /workspace, así que node_modules persiste entre ellos.
   - id: 'deps'
-    name: 'node:22-slim'
+    name: '${_NODE_IMAGE}'
     entrypoint: 'npm'
     args: ['ci']
 
   - id: 'lint'
-    name: 'node:22-slim'
+    name: '${_NODE_IMAGE}'
     entrypoint: 'npm'
     args: ['run', 'lint']
 
   # No hay script `typecheck` en package.json; se invoca tsc directamente.
   - id: 'typecheck'
-    name: 'node:22-slim'
+    name: '${_NODE_IMAGE}'
     entrypoint: 'npx'
     args: ['tsc', '--noEmit']
 
   - id: 'test'
-    name: 'node:22-slim'
+    name: '${_NODE_IMAGE}'
     entrypoint: 'npm'
     args: ['test']
 
   # Mismo `next build` que hace el Dockerfile, con el mismo valor inlineado.
   - id: 'build'
-    name: 'node:22-slim'
+    name: '${_NODE_IMAGE}'
     entrypoint: 'npm'
     args: ['run', 'build']
     env:
@@ -69,6 +93,8 @@ steps:
 
 options:
   logging: CLOUD_LOGGING_ONLY
-  machineType: 'E2_HIGHCPU_8'
+  # Máquina por defecto (e2-standard-2, dentro de la cuota gratuita). El
+  # E2_HIGHCPU_8 anterior sacaba de la cuota gratuita un CI que dura minutos y
+  # cuyo cuello de botella es la descarga de dependencias, no la CPU.
 
 timeout: '1800s'

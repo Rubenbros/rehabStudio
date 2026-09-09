@@ -1,8 +1,9 @@
 # ---------------------------------------------------------------------------
 # DESPLIEGUE de producción a Google Cloud Run (europe-west1) — The Rehab Studio
 #
-# Sustituye a .github/workflows/deploy-cloudrun.yml (conservado en
-# .github/workflows-legacy/ hasta que el primer build real pase en verde).
+# Convive con .github/workflows/deploy-cloudrun.yml, que sigue ACTIVO hasta que
+# el orquestador ponga la variable de repositorio DEPLOY_VIA_CLOUD_BUILD=true.
+# Así nunca hay una ventana sin despliegue ni dos despliegues simultáneos.
 # Motivo del cambio: ninguna credencial sale de Google y no dependemos de
 # GitHub para ejecutar nada; GitHub solo notifica el push.
 #
@@ -21,6 +22,11 @@
 #   roles/storage.admin                (bucket de staging de `builds submit`)
 #   NOTA: cloudsql.client NO hace falta aquí — el build no toca la base de
 #   datos; ese rol lo necesita la SA de runtime, no la de build.
+#
+# IMÁGENES: ninguna se descarga de Docker Hub de forma anónima (hay límite de
+# descargas por IP y hace fallar builds sin motivo aparente). Solo se usan
+# imágenes servidas por Google: gcr.io/cloud-builders/* y
+# gcr.io/google.com/cloudsdktool/*. Ver ADR-0001.
 #
 # LANZAR A MANO (ver README.md → Deployment):
 #   gcloud builds submit --config cloudbuild.yaml --region=europe-west1 \
@@ -56,21 +62,29 @@ substitutions:
   _CLINIC_TIMEZONE: 'Europe/Madrid'
   _SESSION_PRICE_EUR: '60'
   _FOLLOWUP_PRICE_EUR: '30'
-  # --- Sin valor real todavía. En los `vars` de GitHub figuraban como el
-  # marcador literal "PENDIENTE"; aquí se dejan VACÍOS para que nadie confunda
-  # un marcador con configuración. Rellenar cuando existan los datos reales.
-  _TWILIO_ACCOUNT_SID: ''
-  _TWILIO_WHATSAPP_FROM: ''
-  _OWNER_PHONE: ''
-  _OWNER_EMAIL: ''
-  _CLINIC_ADDRESS: ''
+  # --- TODO: sin valor real todavía. En los `vars` de GitHub figuran HOY con el
+  # marcador literal "PENDIENTE" y aquí se replica ESE MISMO valor a propósito,
+  # para no cambiar el comportamiento del servicio al migrar de Actions a Cloud
+  # Build. Motivo: src/lib/bot/env.ts las lee con required(), que LANZA con
+  # cadena vacía o variable ausente; y env.ownerPhone() está en el camino
+  # caliente de CADA mensaje entrante (orchestrator.ts:170), así que dejarlas
+  # vacías pasaría el bot de "degradado" (Twilio rechaza credenciales falsas) a
+  # "roto entero". Cuando existan los datos reales, sustituir estos tres valores.
+  _TWILIO_ACCOUNT_SID: 'PENDIENTE'
+  _TWILIO_WHATSAPP_FROM: 'PENDIENTE'
+  _OWNER_PHONE: 'PENDIENTE'
+  # OWNER_EMAIL y CLINIC_ADDRESS ya NO se declaran (antes valían "PENDIENTE"):
+  # env.ts las lee con optional(), que NO lanza, y propagar el marcador
+  # imprimía "PENDIENTE" en un mensaje de WhatsApp de cara al paciente
+  # ("📍 PENDIENTE", tools.ts:413). Sin declarar, el fallback es cadena vacía.
 
 steps:
   # 1) La trazabilidad revisión<->commit depende de $COMMIT_SHA, que viene
   #    VACÍO en builds lanzados a mano. Fallar aquí, ruidosamente, en lugar de
   #    publicar una imagen sin etiqueta de commit.
   - id: 'exigir-commit-sha'
-    name: 'bash'
+    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    entrypoint: 'bash'
     args:
       - '-c'
       - |
@@ -100,7 +114,11 @@ steps:
       - '.'
 
   # 3) Push explícito ANTES de desplegar (el bloque `images:` empuja al final
-  #    del build, demasiado tarde para `gcloud run deploy`).
+  #    del build, demasiado tarde para `gcloud run deploy`). Por eso este
+  #    fichero NO declara `images:`: sería una segunda referencia construida con
+  #    ${COMMIT_SHA} FUERA del alcance del guardia del paso 1 y, en un build
+  #    manual sin substitución, dejaría una etiqueta inválida (`...:`) que hace
+  #    fallar el build al final. Estos dos pasos publican exactamente lo mismo.
   - id: 'push-sha'
     name: 'gcr.io/cloud-builders/docker'
     args: ['push', '${_AR_HOST}/${_PROJECT_ID}/${_AR_REPO}/${_SERVICE}:${COMMIT_SHA}']
@@ -139,31 +157,106 @@ steps:
           --timeout 120 \
           --cpu-boost \
           --add-cloudsql-instances "${_CLOUDSQL_INSTANCE}" \
-          --set-env-vars "^|^NODE_ENV=production|NEXT_PUBLIC_SITE_URL=${_NEXT_PUBLIC_SITE_URL}|TWILIO_ACCOUNT_SID=${_TWILIO_ACCOUNT_SID}|TWILIO_WHATSAPP_FROM=${_TWILIO_WHATSAPP_FROM}|GOOGLE_CLOUD_PROJECT=${_PROJECT_ID}|VERTEX_LOCATION=${_VERTEX_LOCATION}|GEMINI_MODEL=${_GEMINI_MODEL}|GOOGLE_CLIENT_ID=${_GOOGLE_CLIENT_ID}|GOOGLE_REDIRECT_URI=${_GOOGLE_REDIRECT_URI}|GOOGLE_CALENDAR_ID=${_GOOGLE_CALENDAR_ID}|OWNER_PHONE=${_OWNER_PHONE}|OWNER_EMAIL=${_OWNER_EMAIL}|CLINIC_NAME=${_CLINIC_NAME}|CLINIC_TIMEZONE=${_CLINIC_TIMEZONE}|CLINIC_ADDRESS=${_CLINIC_ADDRESS}|SESSION_PRICE_EUR=${_SESSION_PRICE_EUR}|FOLLOWUP_PRICE_EUR=${_FOLLOWUP_PRICE_EUR}" \
+          --set-env-vars "^|^NODE_ENV=production|NEXT_PUBLIC_SITE_URL=${_NEXT_PUBLIC_SITE_URL}|TWILIO_ACCOUNT_SID=${_TWILIO_ACCOUNT_SID}|TWILIO_WHATSAPP_FROM=${_TWILIO_WHATSAPP_FROM}|GOOGLE_CLOUD_PROJECT=${_PROJECT_ID}|VERTEX_LOCATION=${_VERTEX_LOCATION}|GEMINI_MODEL=${_GEMINI_MODEL}|GOOGLE_CLIENT_ID=${_GOOGLE_CLIENT_ID}|GOOGLE_REDIRECT_URI=${_GOOGLE_REDIRECT_URI}|GOOGLE_CALENDAR_ID=${_GOOGLE_CALENDAR_ID}|OWNER_PHONE=${_OWNER_PHONE}|CLINIC_NAME=${_CLINIC_NAME}|CLINIC_TIMEZONE=${_CLINIC_TIMEZONE}|SESSION_PRICE_EUR=${_SESSION_PRICE_EUR}|FOLLOWUP_PRICE_EUR=${_FOLLOWUP_PRICE_EUR}" \
           --set-secrets "DATABASE_URL=DATABASE_URL:latest,TWILIO_AUTH_TOKEN=TWILIO_AUTH_TOKEN:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REFRESH_TOKEN=GOOGLE_REFRESH_TOKEN:latest,CRON_SECRET=CRON_SECRET:latest,MCP_BEARER_TOKEN=MCP_BEARER_TOKEN:latest"
 
-  # 5) URL del servicio (igual que el workflow: solo informa, no valida).
-  - id: 'url'
+  # 5) SERIALIZACIÓN. Cloud Build no tiene el `concurrency` de GitHub Actions:
+  #    dos pushes seguidos a master lanzan dos builds en paralelo y el que
+  #    termine ÚLTIMO deja su revisión sirviendo, que puede ser la del commit
+  #    MÁS VIEJO. Se comprueba a posteriori (no a priori con `gcloud builds
+  #    list`) porque preguntar si hay otro build en curso es una carrera en sí
+  #    misma —el otro puede arrancar justo después de la consulta— y además
+  #    exigiría permisos de lectura de builds. Verificar el resultado observa el
+  #    ÚNICO estado que importa: qué revisión sirve tráfico. Si no es la de ESTE
+  #    commit, el build sale ROJO (el estado final del servicio sigue siendo el
+  #    correcto —sirve la revisión del build más nuevo—; el rojo es la señal de
+  #    que este despliegue fue pisado).
+  - id: 'verificar-revision'
     name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
         set -euo pipefail
-        gcloud run services describe "${_SERVICE}" \
-          --project "${_PROJECT_ID}" \
-          --region "${_REGION}" \
-          --format 'value(status.url)'
+        # Cloud Run resuelve la etiqueta a DIGEST al desplegar, así que la
+        # revisión NUNCA reporta la etiqueta: hay que comparar digest con digest.
+        ETIQUETA="${_AR_HOST}/${_PROJECT_ID}/${_AR_REPO}/${_SERVICE}:${COMMIT_SHA}"
+        DIGEST="$$(gcloud artifacts docker images describe "$$ETIQUETA"           --project "${_PROJECT_ID}"           --format "value(image_summary.digest)")"
+        if [ -z "$$DIGEST" ]; then
+          echo "ERROR: no se pudo resolver el digest de $$ETIQUETA." >&2
+          exit 1
+        fi
+        ESPERADA="${_AR_HOST}/${_PROJECT_ID}/${_AR_REPO}/${_SERVICE}@$$DIGEST"
+        REV="$$(gcloud run services describe "${_SERVICE}" \
+          --project "${_PROJECT_ID}" --region "${_REGION}" \
+          --format 'value(status.traffic[0].revisionName)')"
+        if [ -z "$$REV" ]; then
+          echo "ERROR: no se pudo determinar la revisión que sirve tráfico." >&2
+          exit 1
+        fi
+        SIRVIENDO="$$(gcloud run revisions describe "$$REV" \
+          --project "${_PROJECT_ID}" --region "${_REGION}" \
+          --format 'value(spec.containers[0].image)')"
+        echo "Revisión sirviendo: $$REV"
+        echo "Imagen sirviendo:   $$SIRVIENDO"
+        if [ "$$SIRVIENDO" != "$$ESPERADA" ]; then
+          echo "ERROR: la revisión que sirve NO es la de este commit." >&2
+          echo "  esperada: $$ESPERADA" >&2
+          echo "  real:     $$SIRVIENDO" >&2
+          echo "Causa probable: otro build desplegó en paralelo. Comprueba qué" >&2
+          echo "commit quedó sirviendo antes de relanzar nada." >&2
+          exit 1
+        fi
 
-# Registra la imagen en la ficha del build.
-images:
-  - '${_AR_HOST}/${_PROJECT_ID}/${_AR_REPO}/${_SERVICE}:${COMMIT_SHA}'
-  - '${_AR_HOST}/${_PROJECT_ID}/${_AR_REPO}/${_SERVICE}:latest'
+  # 6) VERIFICACIÓN POST-DESPLIEGUE. Hasta ahora el build salía verde aunque la
+  #    revisión nueva sirviera errores en todas las rutas. Se piden dos rutas
+  #    públicas reales y se exige 200:
+  #      /    -> home en español (localePrefix 'as-needed': el idioma por
+  #              defecto NO redirige, así que debe responder 200, no 3xx).
+  #      /en  -> home en inglés; valida además el middleware de next-intl.
+  #    Se reintenta para absorber el arranque en frío (min-instances 0).
+  - id: 'verificar-http'
+    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        URL="$$(gcloud run services describe "${_SERVICE}" \
+          --project "${_PROJECT_ID}" --region "${_REGION}" \
+          --format 'value(status.url)')"
+        echo "URL del servicio: $$URL"
+        comprobar() {
+          RUTA="$$1"
+          CODIGO=000
+          for INTENTO in 1 2 3 4 5 6 7 8 9 10; do
+            # curl escribe el código igualmente (000 si ni siquiera conectó) y
+            # sale distinto de 0; `|| true` evita que `set -e` mate el bucle.
+            CODIGO="$$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$$URL$$RUTA" || true)"
+            [ -n "$$CODIGO" ] || CODIGO=000
+            if [ "$$CODIGO" = "200" ]; then
+              echo "OK  $$RUTA -> 200 (intento $$INTENTO)"
+              return 0
+            fi
+            echo "... $$RUTA -> $$CODIGO (intento $$INTENTO), reintentando"
+            sleep 6
+          done
+          echo "ERROR: $$RUTA no respondió 200 tras 10 intentos (último: $$CODIGO)." >&2
+          echo "La revisión está desplegada pero NO sirve. Revisa los logs de" >&2
+          echo "Cloud Run y revierte a la revisión anterior si procede." >&2
+          return 1
+        }
+        comprobar "/"
+        comprobar "/en"
+        echo "Despliegue verificado: $$URL"
 
 options:
   logging: CLOUD_LOGGING_ONLY
-  machineType: 'E2_HIGHCPU_8'
+  # Máquina POR DEFECTO (e2-standard-2, la que entra en la cuota gratuita de
+  # Cloud Build). El E2_HIGHCPU_8 anterior sacaba cada build de la cuota
+  # gratuita sin necesidad: este repo es pequeño, el pipeline tarda ~2m20s y el
+  # 70 % es el docker build sin caché (I/O de red, no CPU). Si algún día se
+  # MIDE que hace falta, se sube con `machineType:` y se justifica.
 
-# Hoy el pipeline tarda ~2m20s (el 70 % es el docker build sin caché). 30 min
-# dejan margen de sobra ante lentitud de deb.debian.org o registry.npmjs.org.
+# 30 min dejan margen de sobra ante lentitud de deb.debian.org o registry.npmjs.org.
 timeout: '1800s'
