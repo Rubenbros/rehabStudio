@@ -1,0 +1,74 @@
+# ---------------------------------------------------------------------------
+# PRUEBAS (CI) — The Rehab Studio
+#
+# Puerta de calidad para pull requests. NO existía como workflow de GitHub
+# Actions: hasta ahora los 12 ficheros de test con vitest nunca se ejecutaban en
+# CI y el pipeline era solo "docker build + push + deploy".
+#
+# Este build NO publica imagen ni despliega nada: solo verifica.
+#
+# NO necesita servicios externos (ni Postgres ni stripe-mock):
+#   - tests/db.integration.test.ts usa `describe.skipIf(!DATABASE_URL_TEST)` y
+#     se salta solo. Correrlo aquí exigiría la instancia de Cloud SQL COMPARTIDA
+#     t800labsweb:europe-west1:t800labs-pg, con riesgo de contaminación cruzada
+#     entre apps: decisión consciente de dejarlo fuera del CI automático.
+#   - tests/bot/llm.live.test.ts usa `describe.skipIf(VERTEX_LIVE_TEST!=1)`, se
+#     salta solo y cuesta tokens de Vertex AI.
+# Resultado esperado hoy: 9 ficheros pasan, 2 se saltan (68 tests en verde).
+#
+# PERMISOS que necesita la SA de build: solo roles/logging.logWriter (y
+# roles/storage.admin si se lanza a mano con `gcloud builds submit`). Se reutiliza
+# cloudbuild-deployer@ por simplicidad, PERO lo correcto es una SA aparte sin
+# run.admin: este build ejecuta código de pull requests y no debería poder
+# desplegar a producción. Ver informe de migración.
+#
+# LANZAR A MANO:
+#   gcloud builds submit --config cloudbuild-ci.yaml --region=europe-west1 \
+#     --project=rehab-studio-web
+# ---------------------------------------------------------------------------
+
+serviceAccount: 'projects/rehab-studio-web/serviceAccounts/cloudbuild-deployer@rehab-studio-web.iam.gserviceaccount.com'
+
+substitutions:
+  # `next build` inlinea los NEXT_PUBLIC_*: sin este valor el bundle compila
+  # igual pero con la URL vacía. Se usa el mismo que en producción para que el
+  # build del CI sea representativo.
+  _NEXT_PUBLIC_SITE_URL: 'https://therehabstudio.es'
+
+steps:
+  # Los pasos comparten /workspace, así que node_modules persiste entre ellos.
+  - id: 'deps'
+    name: 'node:22-slim'
+    entrypoint: 'npm'
+    args: ['ci']
+
+  - id: 'lint'
+    name: 'node:22-slim'
+    entrypoint: 'npm'
+    args: ['run', 'lint']
+
+  # No hay script `typecheck` en package.json; se invoca tsc directamente.
+  - id: 'typecheck'
+    name: 'node:22-slim'
+    entrypoint: 'npx'
+    args: ['tsc', '--noEmit']
+
+  - id: 'test'
+    name: 'node:22-slim'
+    entrypoint: 'npm'
+    args: ['test']
+
+  # Mismo `next build` que hace el Dockerfile, con el mismo valor inlineado.
+  - id: 'build'
+    name: 'node:22-slim'
+    entrypoint: 'npm'
+    args: ['run', 'build']
+    env:
+      - 'NEXT_PUBLIC_SITE_URL=${_NEXT_PUBLIC_SITE_URL}'
+      - 'NEXT_TELEMETRY_DISABLED=1'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'
+
+timeout: '1800s'

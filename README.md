@@ -99,16 +99,40 @@ Full setup — Cloud SQL, Google Calendar OAuth, Twilio, Vertex AI, MCP — live
 ## Deployment
 
 Production runs on **Google Cloud Run** (`europe-west1`, service
-`rehab-studio`). Pushing to `master` triggers
-`.github/workflows/deploy-cloudrun.yml`, which builds the standalone image,
-pushes it to Artifact Registry and deploys. Plain settings come from GitHub
-`vars`; secrets come from Secret Manager.
+`rehab-studio`, project `rehab-studio-web`). CI/CD is **Google Cloud Build** —
+no credential ever leaves Google and GitHub does not execute anything.
+
+| File                 | What it does                                                                                  |
+| -------------------- | --------------------------------------------------------------------------------------------- |
+| `cloudbuild.yaml`    | Deploy: docker build → push to Artifact Registry (`:$COMMIT_SHA` and `:latest`) → `gcloud run deploy`. |
+| `cloudbuild-ci.yaml` | Quality gate for pull requests: `npm ci`, lint, `tsc --noEmit`, vitest, `next build`. Deploys nothing. |
+
+Non-secret settings live as `substitutions:` inside `cloudbuild.yaml` — they are
+versioned and auditable instead of hidden in GitHub `vars`. Secrets are never in
+the repo: `--set-secrets` passes Secret Manager *references* that Cloud Run
+resolves at startup with the runtime service account.
+
+Builds run as `cloudbuild-deployer@rehab-studio-web.iam.gserviceaccount.com`
+(see the permission list at the top of `cloudbuild.yaml`).
 
 ```bash
+# Manual deploy (COMMIT_SHA is required — it tags the image and keeps
+# revision↔commit traceability; it is empty on manual builds).
+gcloud builds submit --config cloudbuild.yaml --region=europe-west1 \
+  --project=rehab-studio-web \
+  --substitutions=COMMIT_SHA="$(git rev-parse HEAD)"
+
+# Manual CI run
+gcloud builds submit --config cloudbuild-ci.yaml --region=europe-west1 \
+  --project=rehab-studio-web
+
 # Local production build
 npm run build
 npm run start
 ```
+
+The previous GitHub Actions workflow is kept under
+`.github/workflows-legacy/` until the first real Cloud Build run is green.
 
 ## Claude Code
 
